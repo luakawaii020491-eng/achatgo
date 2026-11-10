@@ -257,7 +257,10 @@ export default function CreateOrderView({ ctx, prefill, conversation, onClose }:
     const p = products.find((x) => x.id === productId);
     setLine(idx, { productId, variantSku: '', price: p?.price || 0 });
   };
-  const productOptions = (p: Product) => p.variants || [];
+  // Dòng hàng trống (chưa chọn SP) có productId '' -> p là undefined;
+  // phải chịu undefined, nếu không render lần đầu đã throw TypeError
+  // (mất cả app vì không có error boundary) — bug trắng màn 10-11.
+  const productOptions = (p: Product | undefined) => p?.variants || [];
 
   const filteredConvs = useMemo(() => {
     const q = fold(pickConvQuery.trim());
@@ -424,7 +427,7 @@ export default function CreateOrderView({ ctx, prefill, conversation, onClose }:
                         <td style={{ minWidth: 170 }}>
                           <select value={line.variantSku} onChange={(e) => setLine(idx, { variantSku: e.target.value })} disabled={!p}>
                             <option value="">— Màu × size —</option>
-                            {productOptions(p as Product).map((v) => (
+                            {productOptions(p).map((v) => (
                               <option key={v.sku} value={v.sku}>{v.color} {v.size}{v.stock >= 0 ? ` (tồn ${v.stock})` : ''}</option>
                             ))}
                           </select>
