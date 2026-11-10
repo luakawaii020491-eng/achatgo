@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AChatGo — Quản lý bán hàng</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+  <!-- Màn đăng nhập -->
+  <div id="login-screen" class="login-screen">
+    <div class="login-card">
+      <div class="login-logo">AChatGo</div>
+      <p class="login-sub">Quản lý đơn hàng • Fanpage • Vận chuyển</p>
+      <form id="login-form">
+        <label>Email hoặc tên đăng nhập
+          <input id="login-identifier" type="text" autocomplete="username" placeholder="vd: lua123@gmail.com hoặc lua123" required>
+        </label>
+        <label>Mật khẩu
+          <input id="login-password" type="password" autocomplete="current-password" placeholder="Mật khẩu" required>
+        </label>
+        <div id="login-error" class="error hidden"></div>
+        <button type="submit" class="btn btn-primary btn-block">Đăng nhập</button>
+      </form>
+      <p class="login-note">Shop mới đăng ký dùng thử 1 hoặc 7 ngày (1 page, 1 nhân viên, 0đ).<br>Tổng đài: <strong>0916636785</strong></p>
+    </div>
+  </div>
+
+  <!-- Màn chính -->
+  <div id="main-screen" class="main-screen hidden">
+    <aside class="sidebar">
+      <div class="sidebar-logo">AChatGo</div>
+      <div class="shop-picker">
+        <label>Shop</label>
+        <select id="shop-select"></select>
+      </div>
+      <nav class="nav">
+        <button data-view="orders" class="nav-item active">Đơn hàng</button>
+        <button data-view="products" class="nav-item">Sản phẩm</button>
+        <button data-view="customers" class="nav-item">Khách hàng</button>
+        <button data-view="conversations" class="nav-item">Hội thoại</button>
+        <button data-view="shipping" class="nav-item">Vận chuyển</button>
+        <button data-view="channels" class="nav-item">Kênh bán hàng</button>
+        <button data-view="shipfees" class="nav-item">Cài đặt phí ship</button>
+        <button data-view="ai" class="nav-item">Trợ lý AI</button>
+        <button data-view="superadmin" class="nav-item hidden" id="nav-superadmin">Super Admin</button>
+      </nav>
+      <div class="sidebar-footer">
+        <span id="account-info" class="account-info"></span>
+        <button id="logout-btn" class="btn btn-ghost">Đăng xuất</button>
+      </div>
+    </aside>
+
+    <div class="content">
+      <header class="topbar">
+        <h1 id="view-title">Đơn hàng</h1>
+        <div class="topbar-right">
+          <span id="status-pill" class="pill">● Đang hoạt động</span>
+          <button id="create-order-btn" class="btn btn-primary">+ Tạo đơn (F1)</button>
+        </div>
+      </header>
+      <div id="error-banner" class="error hidden"></div>
+      <main id="view"></main>
+    </div>
+  </div>
+
+  <!-- Form tạo đơn toàn màn hình kiểu Achat -->
+  <div id="order-modal" class="modal hidden">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2>Tạo đơn mới</h2>
+        <button id="order-modal-close" class="btn btn-ghost">✕ Đóng (Esc)</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-grid">
+          <label>Tên khách hàng <input id="ord-customer" type="text" placeholder="Lấy từ nick Facebook, không hỏi lại tên"></label>
+          <label>Số điện thoại <input id="ord-phone" type="text" placeholder="0xxxxxxxxx"></label>
+          <label class="full">Địa chỉ giao hàng <input id="ord-address" type="text" placeholder="Ghi theo địa chỉ cũ trước sáp nhập"></label>
+          <label>Ghi chú <input id="ord-note" type="text" placeholder="vd: Khách đặt: 1 đôi 36 đen + 1 đôi 37 trắng"></label>
+        </div>
+        <h3>Sản phẩm</h3>
+        <table class="table" id="ord-lines-table">
+          <thead><tr><th>Sản phẩm</th><th>Biến thể (màu × size)</th><th>SL</th><th>Đơn giá</th><th>Thành tiền</th><th></th></tr></thead>
+          <tbody id="ord-lines"></tbody>
+        </table>
+        <button id="ord-add-line" class="btn">+ Thêm dòng sản phẩm</button>
+        <div class="order-total">
+          <span>Phí ship: <strong id="ord-ship">0đ</strong></span>
+          <span>Tổng COD: <strong id="ord-total">0đ</strong></span>
+        </div>
+        <div id="ord-error" class="error hidden"></div>
+      </div>
+      <div class="modal-foot">
+        <button id="ord-save" class="btn btn-primary">Lưu đơn (F8)</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

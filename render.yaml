@@ -1,0 +1,49 @@
+# AChatGo — deploy lên Render
+# Nguồn: https://github.com/<user>/achatgo (branch main)
+# LƯU Ý CHI PHÍ: service dưới đây dùng plan free. Nâng lên Starter ~7 USD/tháng
+# + Postgres ~6 USD/tháng CHỈ khi user bấm nâng — không tự trả, không tự nâng.
+# Disk free tier có thể không giữ dữ liệu khi deploy lại; dữ liệu thật nên dùng
+# Postgres (xem phần database đã comment ở cuối file + README.md).
+
+services:
+  - type: web
+    name: achatgo
+    runtime: node
+    region: singapore
+    plan: free
+    branch: main
+    buildCommand: npm install --legacy-peer-deps && npm run build
+    startCommand: npx tsx server.ts
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      # Đường dẫn file dữ liệu JSON trên disk đính kèm (xem disk bên dưới).
+      # Khi có DATABASE_URL thì server ưu tiên Postgres, bỏ qua file này.
+      - key: DATA_FILE
+        value: /var/data/achatgo.json
+    disk:
+      name: achatgo-data
+      mountPath: /var/data
+      sizeGB: 1
+
+# ---------------------------------------------------------------------------
+# DATABASE POSTGRES — ĐANG TẮT THEO MẶC ĐỊNH.
+# Lý do: render.yaml sẽ tự tạo database nếu khai báo ở đây. Chỉ bật khi user
+# đã duyệt dùng Postgres (free plan) cho dữ liệu thật. Cách bật: bỏ comment
+# khối dưới, bỏ comment envVar DATABASE_URL ở service trên, rồi deploy lại.
+# ---------------------------------------------------------------------------
+# databases:
+#   - name: achatgo-db
+#     plan: free
+#     databaseName: achatgo
+#     user: achatgo
+#     region: singapore
+#
+# (và thêm vào envVars của service achatgo:)
+#      - key: DATABASE_URL
+#        fromDatabase:
+#          name: achatgo-db
+#          property: connectionString
