@@ -32,7 +32,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { fileURLToPath } from "url";
 import path from "path";
 
-const VERSION = "v40-standalone";
+const VERSION = "v42-standalone";
 const PORT = Number(process.env.PORT ?? 10000);
 
 // ---------------------------------------------------------------------------
@@ -49,6 +49,8 @@ type StoreModule = {
 type AuthModule = {
   loginAccount: (state: any, identifier: string, password: string) => any;
   toPublicAccount: (account: any) => any;
+  hashPassword?: (password: string) => string;
+  verifyPassword?: (password: string, passwordHash: string) => boolean;
   maskSecret?: (s: string) => string;
 };
 type ActionsModule = {
@@ -491,9 +493,38 @@ async function main(): Promise<void> {
         state = seed.seedInitialState();
         await store.saveState(state);
         console.log("[achatgo] đã seed dữ liệu khởi tạo lần đầu (4 shop, catalogue, Super Admin mặc định)");
-        console.log("[achatgo] TÀI KHOẢN SUPER ADMIN LẦN ĐẦU: admin@achat.vn — MẬT KHẨU TẠM (chỉ hiện 1 lần ở log này, đổi ngay sau khi đăng nhập):", seed.generatedAdminPassword ?? "(không đọc được — đặt lại bằng setupsuperadmin)");
+        if (process.env.SUPER_ADMIN_PASSWORD) {
+          console.log("[achatgo] Super Admin dùng mật khẩu cố định từ SUPER_ADMIN_PASSWORD (không hiện giá trị).");
+        } else {
+          console.log("[achatgo] TÀI KHOẢN SUPER ADMIN LẦN ĐẦU: admin@achat.vn — MẬT KHẨU TẠM (chỉ hiện 1 lần ở log này, đổi ngay sau khi đăng nhập):", seed.generatedAdminPassword ?? "(không đọc được — đặt lại bằng setupsuperadmin)");
+        }
       } catch (err) {
         console.warn("[achatgo] không seed được dữ liệu khởi tạo:", (err as Error).message);
+      }
+    }
+    // SUPER_ADMIN_PASSWORD (TẠM THỜI, theo yêu cầu chủ shop): nếu đặt thì
+    // đồng bộ tài khoản Super Admin hiện có về mật khẩu cố định + tắt cờ
+    // đổi mật khẩu, để restart/re-seed không đổi mật khẩu nữa (xem
+    // src/seed.ts reconcileFixedAdminPassword). Env var ngắn hơn 6 ký tự
+    // thì dừng server ngay, không lặng lẽ dùng mật khẩu tạm.
+    const fixedAdminPw = process.env.SUPER_ADMIN_PASSWORD;
+    if (fixedAdminPw !== undefined && fixedAdminPw.length < 6) {
+      console.error("[achatgo] LỖI: SUPER_ADMIN_PASSWORD tối thiểu 6 ký tự — dừng server.");
+      process.exit(1);
+    }
+    if (fixedAdminPw !== undefined && auth && typeof auth.hashPassword === "function" && typeof auth.verifyPassword === "function") {
+      try {
+        const seedMod = (await import("./src/seed.js")) as {
+          reconcileFixedAdminPassword?: (state: any, auth: any) => boolean;
+        };
+        if (typeof seedMod.reconcileFixedAdminPassword === "function") {
+          if (seedMod.reconcileFixedAdminPassword(state, auth)) {
+            await store.saveState(state);
+            console.log("[achatgo] đã đồng bộ tài khoản Super Admin về mật khẩu cố định từ SUPER_ADMIN_PASSWORD (không hiện giá trị).");
+          }
+        }
+      } catch (err) {
+        console.warn("[achatgo] không đồng bộ được mật khẩu Super Admin cố định:", (err as Error).message);
       }
     }
   } else {

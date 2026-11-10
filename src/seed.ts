@@ -13,15 +13,56 @@ import { createEmptyState } from './store.js';
 export const SEED_VERSION = 'v38';
 
 /**
- * Mật khẩu tạm của Super Admin mặc định — SINH NGẪU NHIÊN MỖI LẦN SEED,
- * chỉ in 1 lần ra log server lúc khởi tạo (server.ts), KHÔNG ghi cứng
- * trong code (repo public mà ghi mật khẩu mặc định thì ai cũng vào được).
- * Đổi ngay lần đăng nhập đầu tiên (mustChangePassword = true).
+ * Mật khẩu Super Admin mặc định.
+ * - Mặc định: mật khẩu TẠM sinh ngẫu nhiên mỗi lần seed, chỉ in 1 lần ra
+ *   log server lúc khởi tạo (server.ts), KHÔNG ghi cứng trong code (repo
+ *   public mà ghi mật khẩu mặc định thì ai cũng vào được). Đổi ngay lần
+ *   đăng nhập đầu tiên (mustChangePassword = true).
+ * - TẠM THỜI (theo yêu cầu chủ shop 2026-11-10): nếu đặt biến môi trường
+ *   SUPER_ADMIN_PASSWORD (>= 6 ký tự) thì dùng luôn mật khẩu đó làm mật
+ *   khẩu cố định, mustChangePassword = false, KHÔNG in giá trị ra log —
+ *   để restart/re-seed không đổi mật khẩu nữa. Khi chạy thật thì đổi mật
+ *   khẩu này (đặt lại env var hoặc đổi mật khẩu trong app rồi xóa env).
+ *   Env var đặt mà ngắn hơn 6 ký tự thì throw lỗi, server dừng.
  */
 export let generatedAdminPassword = '';
 
 function newAdminTempPassword(): string {
   return 'Admin-' + randomBytes(9).toString('base64url');
+}
+
+/** Mật khẩu Super Admin sẽ dùng khi seed: cố định từ env (nếu có) hoặc tạm ngẫu nhiên. */
+export function resolveAdminPassword(): { password: string; fixed: boolean } {
+  const fixed = process.env.SUPER_ADMIN_PASSWORD;
+  if (fixed !== undefined) {
+    if (fixed.length < 6) throw new Error('SUPER_ADMIN_PASSWORD tối thiểu 6 ký tự.');
+    return { password: fixed, fixed: true };
+  }
+  return { password: newAdminTempPassword(), fixed: false };
+}
+
+export interface AdminPasswordAuth {
+  verifyPassword: (password: string, passwordHash: string) => boolean;
+  hashPassword: (password: string) => string;
+}
+
+/**
+ * Đồng bộ tài khoản Super Admin HIỆN CÓ về mật khẩu cố định từ env (khi
+ * SUPER_ADMIN_PASSWORD được đặt): đặt lại hash + tắt cờ đổi mật khẩu.
+ * Trả về true nếu có thay đổi (caller lưu state). Không có env var, không
+ * có tài khoản SA, hoặc tài khoản đã đúng thì trả false. Env var ngắn
+ * hơn 6 ký tự thì throw.
+ */
+export function reconcileFixedAdminPassword(state: State, auth: AdminPasswordAuth): boolean {
+  const fixed = process.env.SUPER_ADMIN_PASSWORD;
+  if (fixed === undefined) return false;
+  if (fixed.length < 6) throw new Error('SUPER_ADMIN_PASSWORD tối thiểu 6 ký tự.');
+  const sa = state.accounts.find((a) => a.role === 'super_admin');
+  if (!sa) return false;
+  if (sa.mustChangePassword === false && auth.verifyPassword(fixed, sa.passwordHash)) return false;
+  sa.passwordHash = auth.hashPassword(fixed);
+  sa.mustChangePassword = false;
+  return true;
 }
 
 interface ColorDef {
@@ -200,17 +241,20 @@ export function seedInitialState(): State {
   // bcrypt ngay lúc seed — hash của artifact Muse không xuất được nên
   // tài khoản cũ phải đặt lại mật khẩu khi lên Render. Đổi mật khẩu này
   // ngay lần đăng nhập đầu tiên (mustChangePassword = true).
-  generatedAdminPassword = newAdminTempPassword();
+  // Nếu đặt SUPER_ADMIN_PASSWORD thì dùng mật khẩu cố định đó (xem
+  // resolveAdminPassword ở đầu file) và tắt cờ đổi mật khẩu.
+  const adminPw = resolveAdminPassword();
+  generatedAdminPassword = adminPw.password;
   state.accounts = [
     {
       id: 'acc-super-admin',
       email: 'admin@achat.vn',
       username: 'admin',
-      passwordHash: hashPassword(generatedAdminPassword),
+      passwordHash: hashPassword(adminPw.password),
       role: 'super_admin',
       shopKey: null,
       displayName: 'Super Admin',
-      mustChangePassword: true,
+      mustChangePassword: !adminPw.fixed,
       createdAt: now,
     },
   ];
