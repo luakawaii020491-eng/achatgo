@@ -158,10 +158,15 @@ seller của mình (shop ID). Partner Key không bao giờ hiện lại sau khi 
 
 ## LƯU Ý QUAN TRỌNG
 
-1. **Bản standalone này tái tạo từ bản artifact v38.** UI client
-   (`public/`) là bản viết lại tối giản theo đúng phong cách Achat cũ, KHÔNG
-   phải bản sao byte-for-byte của client artifact — client artifact không
-   xuất được.
+1. **Bản standalone này tái tạo từ bản artifact v38; từ v39 client là bản
+   port đầy đủ giao diện artifact sang Vite/React** (`client/`, build ra
+   `public/`): sidebar navy 22 view, header chọn shop + pill trạng thái +
+   nút Tạo đơn, Tạo đơn toàn màn hình kiểu Sapo (F1/F8/F6), hội thoại
+   3 cột, dashboard, đơn/sản phẩm/khách/bình luận/livestream/marketing/
+   sổ quỹ/trả hàng/kho/báo cáo/kênh/vận chuyển/phí ship/AI/đánh giá/cài
+   đặt/nhân viên/Super Admin. Adapter API dịch sang POST /api/action +
+   GET /api/bootstrap với header x-account-token. Backend ~170 action
+   giữ nguyên hành vi (xem `src/`).
 2. **KHÔNG kèm dữ liệu khách hàng thật** — không SĐT, địa chỉ, tên khách, hội
    thoại nào. Dữ liệu thật đang ở trong artifact Muse. Khi lên Render phải
    tạo shop / tài khoản / sản phẩm mới hoặc nhập lại; tài khoản cũ phải đặt
@@ -198,7 +203,9 @@ seller của mình (shop ID). Partner Key không bao giờ hiện lại sau khi 
 ```
 package.json  tsconfig.json  render.yaml  .env.example  .gitignore
 server.ts            # entry Express: tĩnh public/ + POST /api/action + /health + /api/bootstrap
-public/              # client SPA: index.html, app.js, style.css
+public/              # client SPA đã build (index.html + assets/ — sinh bởi `npm run build`)
+client/              # mã nguồn client Vite/React (api.ts, App.tsx, views/, theme.css)
+vite.config.ts       # build client ra public/
 src/                 # logic nghiệp vụ (agent khác viết — xem mục 6 ở trên)
 docs/DEPLOY_CHECKLIST.md
 ```

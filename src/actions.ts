@@ -1055,6 +1055,13 @@ function hGetBootstrap(state: State, ctx: ActionContext): ActionResult {
     shopeeFinance: E.shopeeFinance.filter(shopFilter),
     shopeeReturns: E.shopeeReturns.filter(shopFilter),
     shopeeWebhookEvents: E.shopeeWebhookEvents.filter(shopFilter),
+    // Bản ghi generic theo kind (review, coupon, campaign...) — lọc theo shop.
+    records: Object.fromEntries(
+      Object.entries(E.records || {}).map(([k, v]) => [
+        k,
+        Object.values(v as Record<string, any>).filter(shopFilter),
+      ]),
+    ),
     dataIsolationApplied: E.dataIsolationApplied,
     superAdminSetup: E.superAdminSetup,
   });
