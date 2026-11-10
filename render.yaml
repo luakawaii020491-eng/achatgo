@@ -12,7 +12,11 @@ services:
     region: singapore
     plan: free
     branch: main
-    buildCommand: npm install --legacy-peer-deps && npm run build
+    # --include=dev: BẮT BUỘC vì NODE_ENV=production khiến `npm install`
+    # cắt devDependencies (@types/*) -> tsc lỗi TS7016/TS2591 và build fail
+    # (deploy dep-dbpjs68u01pc7390lov0, 2026-11-10: npm "removed 81 packages").
+    # Các deploy trước chỉ sống sót nhờ cache node_modules "up to date".
+    buildCommand: npm install --legacy-peer-deps --include=dev && npm run build
     startCommand: npx tsx server.ts
     healthCheckPath: /health
     envVars:
