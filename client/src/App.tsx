@@ -104,6 +104,7 @@ export default function App() {
   const [selectedShop, setSelectedShop] = useState('');
   const [createOrderOpen, setCreateOrderOpen] = useState(false);
   const [createPrefill, setCreatePrefill] = useState<CreateOrderPrefill | undefined>(undefined);
+  const [createConversation, setCreateConversation] = useState<Conversation | undefined>(undefined);
   const [toastMsg, setToastMsg] = useState('');
   const [flyout, setFlyout] = useState<string | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
@@ -153,8 +154,9 @@ export default function App() {
   const scoped = useMemo(() => (data ? scopeData(data, isSuperAdmin ? selectedShop : account?.shopKey || '') : null), [data, selectedShop, isSuperAdmin, account]);
   const shopKey = isSuperAdmin ? selectedShop : account?.shopKey || '';
 
-  const openCreateOrder = useCallback((prefill?: CreateOrderPrefill, _conv?: Conversation) => {
+  const openCreateOrder = useCallback((prefill?: CreateOrderPrefill, conv?: Conversation) => {
     setCreatePrefill(prefill);
+    setCreateConversation(conv);
     setCreateOrderOpen(true);
   }, []);
 
@@ -420,7 +422,7 @@ export default function App() {
       </div>
 
       {createOrderOpen && ctx && (
-        <CreateOrderView ctx={ctx} prefill={createPrefill} onClose={() => { setCreateOrderOpen(false); setCreatePrefill(undefined); }} />
+        <CreateOrderView ctx={ctx} prefill={createPrefill} conversation={createConversation} onClose={() => { setCreateOrderOpen(false); setCreatePrefill(undefined); setCreateConversation(undefined); }} />
       )}
       {toastMsg && <div className="toast">{toastMsg}</div>}
     </div>
