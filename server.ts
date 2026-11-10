@@ -4,8 +4,9 @@
  * Entry duy nhất của app: Express phục vụ client tĩnh (public/) + API.
  *
  * GIAO DIỆN VỚI CODE SERVER (nằm trong src/, do agent khác viết):
- *   - src/store.ts  export loadState(): State            (ĐỒNG BỘ, không Promise)
- *                   export saveState(state): void        (ĐỒNG BỘ)
+ *   - src/store.ts  export loadState(): Promise<State>    (async; Postgres
+ *                   khi có DATABASE_URL, file JSON khi không có)
+ *                   export saveState(state): Promise<void>  (async, nối đuôi)
  *                   export createEmptyState(): State
  *                   export scopeState(state, role, shopKey): State
  *                   (lọc state theo quyền xem; KHÔNG tự tẩy passwordHash)
@@ -31,7 +32,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { fileURLToPath } from "url";
 import path from "path";
 
-const VERSION = "v38-standalone";
+const VERSION = "v40-standalone";
 const PORT = Number(process.env.PORT ?? 10000);
 
 // ---------------------------------------------------------------------------
@@ -40,8 +41,8 @@ const PORT = Number(process.env.PORT ?? 10000);
 // agent server viết xong src/actions.ts.
 // ---------------------------------------------------------------------------
 type StoreModule = {
-  loadState: () => any;
-  saveState: (state: any) => void;
+  loadState: () => Promise<any>;
+  saveState: (state: any) => Promise<void>;
   createEmptyState: () => any;
   scopeState: (state: any, role: string, shopKey: string | null) => any;
 };
@@ -68,7 +69,7 @@ async function loadServerModules(): Promise<void> {
     if (typeof store.loadState !== "function" || typeof store.saveState !== "function") {
       throw new Error("src/store.ts thiếu loadState/saveState");
     }
-    console.log("[achatgo] đã nạp src/store.ts (loadState/saveState/scopeState, đồng bộ)");
+    console.log("[achatgo] đã nạp src/store.ts (loadState/saveState async — Postgres khi có DATABASE_URL, file JSON khi không)");
   } catch (err) {
     console.warn("[achatgo] CHƯA nạp được src/store.ts:", (err as Error).message);
     store = null;
@@ -281,7 +282,7 @@ app.post("/webhook/tiktok", express.raw({ type: "*/*", limit: "1mb" }), async (r
         if (typeof actions!.processStoredTikTokWebhookEvent === "function") {
           await actions!.processStoredTikTokWebhookEvent(state, eventId);
         }
-        store!.saveState(state);
+        await store!.saveState(state);
       } catch (e) {
         console.error("[achatgo] xử lý webhook TikTok lỗi:", e);
       }
@@ -319,7 +320,7 @@ app.post("/webhook/shopee", express.raw({ type: "*/*", limit: "1mb" }), async (r
         if (typeof actions!.processStoredShopeePushEvent === "function") {
           await actions!.processStoredShopeePushEvent(state, eventId);
         }
-        store!.saveState(state);
+        await store!.saveState(state);
       } catch (e) {
         console.error("[achatgo] xử lý webhook Shopee lỗi:", e);
       }
@@ -355,7 +356,7 @@ app.get("/auth/tiktok/callback", async (req: Request, res: Response) => {
     if (!result?.ok) {
       return res.status(400).send(page("Kết nối TikTok thất bại", `<h1 class="err">Không đổi được mã ủy quyền</h1><p>${esc(String(result?.error ?? "Lỗi không rõ."))}</p><p>Mã auth_code chỉ dùng được 1 lần trong 30 phút — bấm "Kết nối TikTok" lại trong app để lấy mã mới.</p>`));
     }
-    store.saveState(state);
+    await store.saveState(state);
     const shopName = result.shopName ? ` — ${esc(String(result.shopName))}` : "";
     res.send(page("Kết nối TikTok thành công", `<h1 class="ok">Đã kết nối TikTok Shop${shopName}</h1><p>Shop <b>${esc(shopKey)}</b> đã ủy quyền xong. Đơn hàng, sản phẩm, hoàn/trả và tài chính TikTok sẽ đồng bộ về app.</p><p>Đóng cửa sổ này và quay lại app.</p>`));
   } catch (err) {
@@ -393,7 +394,7 @@ app.get("/auth/shopee/callback", async (req: Request, res: Response) => {
     if (!result?.ok) {
       return res.status(400).send(page("Kết nối Shopee thất bại", `<h1 class="err">Không đổi được mã ủy quyền</h1><p>${esc(String(result?.error ?? "Lỗi không rõ."))}</p><p>Code chỉ dùng được 1 lần trong 10 phút — bấm "Kết nối Shopee" lại trong app để lấy mã mới.</p>`));
     }
-    store.saveState(state);
+    await store.saveState(state);
     const shopName = result.shopName ? ` — ${esc(String(result.shopName))}` : "";
     res.send(page("Kết nối Shopee thành công", `<h1 class="ok">Đã kết nối Shopee${shopName}</h1><p>Shop <b>${esc(shopKey)}</b> đã ủy quyền xong. Đơn hàng, sản phẩm, hoàn/trả và đối soát Shopee sẽ đồng bộ về app.</p><p>Lưu ý: tin nhắn khách Shopee vẫn trả lời tay trong Seller Center (Chat API đã đóng với app mới). SĐT/địa chỉ khách mặc định bị Shopee che.</p><p>Đóng cửa sổ này và quay lại app.</p>`));
   } catch (err) {
@@ -453,7 +454,7 @@ app.post("/api/action", async (req: Request, res: Response, next: NextFunction) 
     const ctx = { account, shopKey: effectiveShopKey, hostShopKey, version: VERSION };
     const result = await actions.handleAction(state, action, args ?? {}, ctx);
     if (result?.ok && isWriteAction(action)) {
-      store.saveState(state);
+      await store.saveState(state);
     }
     res.json(result);
   } catch (err) {
@@ -477,7 +478,7 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 async function main(): Promise<void> {
   await loadServerModules();
   if (store) {
-    state = store.loadState();
+    state = await store.loadState();
     // Khởi tạo lần đầu: file dữ liệu chưa có tài khoản nào thì seed catalogue
     // + 4 shop + tài khoản Super Admin mặc định (xem src/seed.ts). Không có
     // bước này thì deploy mới không ai đăng nhập được (deadlock).
@@ -488,7 +489,7 @@ async function main(): Promise<void> {
           generatedAdminPassword?: string;
         };
         state = seed.seedInitialState();
-        store.saveState(state);
+        await store.saveState(state);
         console.log("[achatgo] đã seed dữ liệu khởi tạo lần đầu (4 shop, catalogue, Super Admin mặc định)");
         console.log("[achatgo] TÀI KHOẢN SUPER ADMIN LẦN ĐẦU: admin@achat.vn — MẬT KHẨU TẠM (chỉ hiện 1 lần ở log này, đổi ngay sau khi đăng nhập):", seed.generatedAdminPassword ?? "(không đọc được — đặt lại bằng setupsuperadmin)");
       } catch (err) {

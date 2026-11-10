@@ -1,9 +1,10 @@
-// store.ts — Lưu state vào file JSON + cách ly dữ liệu theo shop.
+// store.ts — Lưu state vào Postgres (khi có DATABASE_URL) hoặc file JSON.
 // Mô hình v37: tài khoản shop chỉ thấy dữ liệu của đúng shop mình; shop mới
 // bắt đầu TRỐNG HOÀN TOÀN; dữ liệu cũ chỉ Super Admin thấy (chế độ tất cả
 // shop), KHÔNG xóa.
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { Pool } from 'pg';
 import type { Role, State } from './types.js';
 import { tiktokPlatformPublic } from './tiktok.js';
 import { shopeePlatformPublic } from './shopee.js';
@@ -64,23 +65,96 @@ export function createEmptyState(): State {
   };
 }
 
-/** Đọc state từ file JSON (đồng bộ). File chưa có / hỏng -> state trống. */
-export function loadState(filePath: string = dataFilePath()): State {
-  try {
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    const parsed = JSON.parse(raw) as Partial<State>;
-    // Gộp với state trống để file cũ thiếu trường vẫn đủ collection.
-    return { ...createEmptyState(), ...parsed };
-  } catch {
-    return createEmptyState();
-  }
+/**
+ * Hậu trường lưu trữ — Postgres khi có DATABASE_URL (Render), file JSON khi
+ * không có. Một dòng JSONB duy nhất trong bảng app_state (id = 1) giữ toàn
+ * bộ state; load = SELECT, save = INSERT ... ON CONFLICT DO UPDATE.
+ * Render Postgres bắt buộc SSL (rejectUnauthorized: false vì dùng cert
+ * tự ký của Render). Save được nối đuôi (promise chain) để 2 lần ghi
+ * đồng thời không đè mất dữ liệu của nhau (bản file đồng bộ trước đây
+ * vốn không có race này).
+ */
+const PG_TABLE = 'app_state';
+const PG_ROW_ID = 1;
+
+let pool: Pool | null = null;
+/** Seam cho test: chèn Pool giả (vd pg-mem). Production không dùng. */
+let poolOverride: unknown = null;
+export function __setPoolForTest(p: unknown): void {
+  poolOverride = p;
 }
 
-/** Ghi state xuống file JSON (đồng bộ, tạo thư mục nếu chưa có). */
-export function saveState(state: State, filePath: string = dataFilePath()): void {
-  const dir = path.dirname(filePath);
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(state, null, 2), 'utf-8');
+/** true khi app chạy ở chế độ Postgres (có DATABASE_URL). */
+export function isPostgresMode(): boolean {
+  return !!process.env.DATABASE_URL;
+}
+
+function getPool(): Pool | null {
+  if (poolOverride) return poolOverride as Pool;
+  const url = process.env.DATABASE_URL;
+  if (!url) return null;
+  if (!pool) {
+    pool = new Pool({
+      connectionString: url,
+      ssl: { rejectUnauthorized: false },
+      max: 5,
+    });
+    pool.on('error', (err) => console.error('[achatgo] lỗi pool Postgres:', err));
+  }
+  return pool;
+}
+
+async function ensureTable(p: Pool): Promise<void> {
+  await p.query(
+    `CREATE TABLE IF NOT EXISTS ${PG_TABLE} (id integer PRIMARY KEY, data jsonb NOT NULL, updated_at timestamptz NOT NULL)`,
+  );
+}
+
+/** Đọc state (async). Chưa có dòng nào / file chưa có / hỏng -> state trống. */
+export async function loadState(filePath: string = dataFilePath()): Promise<State> {
+  const p = getPool();
+  if (!p) {
+    // Fallback file JSON (đồng bộ như trước đây).
+    try {
+      const raw = fs.readFileSync(filePath, 'utf-8');
+      const parsed = JSON.parse(raw) as Partial<State>;
+      // Gộp với state trống để file cũ thiếu trường vẫn đủ collection.
+      return { ...createEmptyState(), ...parsed };
+    } catch {
+      return createEmptyState();
+    }
+  }
+  // Chế độ Postgres: lỗi kết nối PHẢI nổ ra (fail-closed) thay vì lặng lẽ
+  // dùng file rồi seed đè mất dữ liệu thật — Render sẽ restart service.
+  await ensureTable(p);
+  const r = await p.query(`SELECT data FROM ${PG_TABLE} WHERE id = $1`, [PG_ROW_ID]);
+  if (r.rows.length === 0) return createEmptyState();
+  const parsed = r.rows[0].data as Partial<State>;
+  return { ...createEmptyState(), ...parsed };
+}
+
+let saveChain: Promise<void> = Promise.resolve();
+
+/** Ghi state (async, nối đuôi để không race khi 2 request ghi cùng lúc). */
+export function saveState(state: State, filePath: string = dataFilePath()): Promise<void> {
+  const run = async (): Promise<void> => {
+    const p = getPool();
+    if (!p) {
+      const dir = path.dirname(filePath);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(filePath, JSON.stringify(state, null, 2), 'utf-8');
+      return;
+    }
+    await ensureTable(p);
+    await p.query(
+      `INSERT INTO ${PG_TABLE} (id, data, updated_at) VALUES ($1, $2::jsonb, now())
+       ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
+      [PG_ROW_ID, JSON.stringify(state)],
+    );
+  };
+  const next = saveChain.then(run, run);
+  saveChain = next.catch(() => {});
+  return next;
 }
 
 /**
