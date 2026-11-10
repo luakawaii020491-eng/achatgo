@@ -18,7 +18,11 @@ export class ApiError extends Error {}
 async function parseJson(res: Response): Promise<any> {
   const data = await res.json().catch(() => ({ ok: false, error: 'Server trả về dữ liệu không hợp lệ' }));
   if (!data.ok) throw new ApiError(data.error || 'Lỗi không xác định từ server');
-  return data.data;
+  // Server standalone trả 2 dạng: loginaccount + GET /api/bootstrap bọc payload
+  // trong `data`, còn mọi action khác (getbootstrap, createorder, ...) trả các
+  // trường trần ở top-level. Trả payload đã bọc khi có, nếu không trả toàn bộ
+  // object — khớp kỳ vọng của client (artifact bọc mọi thứ trong `data`).
+  return data.data ?? data;
 }
 
 /** Gọi 1 action nghiệp vụ. shopKey: null = dùng shop của tài khoản/subdomain. */
