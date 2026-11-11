@@ -1,6 +1,7 @@
 // AChatGo — khung app (khớp bản artifact): sidebar navy, header có chọn shop +
-// pill trạng thái + nút Tạo đơn, 21 mục sidebar + Tạo đơn toàn màn hình (F1).
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+// pill trạng thái + nút Tạo đơn, 21 mục sidebar + Tạo đơn (F1): popup dựa
+// phải kiểu Sapo khi mở từ màn Hội thoại, toàn màn hình khi mở từ màn khác.
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   BarChart3, Boxes, ChevronDown, ChevronLeft, ChevronRight, Crown, LayoutDashboard,
   Megaphone, MessageSquare, MessagesSquare, Package, Radio, RotateCcw, Settings,
@@ -109,6 +110,10 @@ export default function App() {
   const [createOrderOpen, setCreateOrderOpen] = useState(false);
   const [createPrefill, setCreatePrefill] = useState<CreateOrderPrefill | undefined>(undefined);
   const [createConversation, setCreateConversation] = useState<Conversation | undefined>(undefined);
+  // Mép trái cửa sổ Tạo đơn khi mở dạng popup dựa phải (kiểu Sapo) từ màn
+  // Hội thoại — đo thật từ mép phải cột chat; null = toàn màn hình như cũ.
+  const chatThreadRef = useRef<HTMLDivElement>(null);
+  const [orderWinLeft, setOrderWinLeft] = useState<number | null>(null);
   const [toastMsg, setToastMsg] = useState('');
   const [flyout, setFlyout] = useState<string | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
@@ -163,6 +168,31 @@ export default function App() {
     setCreateConversation(conv);
     setCreateOrderOpen(true);
   }, []);
+
+  // Đo mép trái cửa sổ Tạo đơn từ mép phải cột chat (SocialChatView gắn
+  // chatThreadRef vào .chat-thread). Chỉ dock khi đang ở màn Hội thoại và
+  // màn hình >= lg (1024px); màn nhỏ / màn khác vẫn toàn màn hình như cũ.
+  const measureOrderWin = useCallback(() => {
+    if (!createOrderOpen || view !== 'conversations' || window.innerWidth < 1024) {
+      setOrderWinLeft((prev) => (prev === null ? prev : null));
+      return;
+    }
+    const el = chatThreadRef.current;
+    if (!el) {
+      setOrderWinLeft((prev) => (prev === null ? prev : null));
+      return;
+    }
+    const left = Math.round(el.getBoundingClientRect().right);
+    setOrderWinLeft((prev) => (prev === left ? prev : left));
+  }, [createOrderOpen, view]);
+
+  // Layout effect + resize listener: đo lại khi mở/đóng cửa sổ, đổi màn,
+  // thu/mở sidebar (đổi vị trí cột chat).
+  useLayoutEffect(() => {
+    measureOrderWin();
+    window.addEventListener('resize', measureOrderWin);
+    return () => window.removeEventListener('resize', measureOrderWin);
+  }, [measureOrderWin, collapsed]);
 
   const ctx: AppContext | null = useMemo(() => {
     if (!scoped || !account) return null;
@@ -323,7 +353,7 @@ export default function App() {
       case 'orders': return <OrdersView {...ctx} />;
       case 'products': return <ProductsView {...ctx} />;
       case 'customers': return <CustomersView {...ctx} />;
-      case 'conversations': return <SocialChatView {...ctx} />;
+      case 'conversations': return <SocialChatView {...ctx} chatThreadRef={chatThreadRef} />;
       case 'comments': return <CommentsView {...ctx} />;
       case 'livestream': return <LivestreamView {...ctx} />;
       case 'marketing': return <MarketingView {...ctx} />;
@@ -347,7 +377,7 @@ export default function App() {
   const shops = data.shops || [];
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${createOrderOpen && view === 'conversations' ? ' order-open' : ''}`}>
       <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
         <div className="sidebar-logo">AChatGo<span className="logo-dot">.</span></div>
         <div className="shop-picker">
@@ -426,7 +456,7 @@ export default function App() {
       </div>
 
       {createOrderOpen && ctx && (
-        <CreateOrderView ctx={ctx} prefill={createPrefill} conversation={createConversation} onClose={() => { setCreateOrderOpen(false); setCreatePrefill(undefined); setCreateConversation(undefined); }} />
+        <CreateOrderView ctx={ctx} prefill={createPrefill} conversation={createConversation} dockedLeft={orderWinLeft} onClose={() => { setCreateOrderOpen(false); setCreatePrefill(undefined); setCreateConversation(undefined); }} />
       )}
       {toastMsg && <div className="toast">{toastMsg}</div>}
     </div>

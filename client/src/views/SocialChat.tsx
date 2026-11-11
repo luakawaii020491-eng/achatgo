@@ -6,7 +6,7 @@ import { callAction, fmtDate, maskPhone } from '../api';
 import type { AppContext } from '../appctx';
 import type { Conversation } from '../types';
 
-export default function SocialChatView({ data, shopKey, refresh, toast, openCreateOrder }: AppContext) {
+export default function SocialChatView({ data, shopKey, refresh, toast, openCreateOrder, chatThreadRef }: AppContext & { chatThreadRef?: React.RefObject<HTMLDivElement> }) {
   const conversations = useMemo(
     () => [...(data.conversations || [])].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt)),
     [data.conversations],
@@ -137,7 +137,7 @@ export default function SocialChatView({ data, shopKey, refresh, toast, openCrea
           )}
         </div>
 
-        <div className="chat-thread">
+        <div className="chat-thread" ref={chatThreadRef}>
           {!selected ? (
             <div className="empty" style={{ margin: 16 }}>Chọn một hội thoại để xem.</div>
           ) : (

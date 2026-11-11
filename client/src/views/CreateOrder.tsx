@@ -26,7 +26,7 @@ const DELIVERY_LABELS: Record<DeliveryMethod, string> = {
 /** So sánh không dấu để tìm sản phẩm / hội thoại. */
 const fold = (s: string) => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
-export default function CreateOrderView({ ctx, prefill, conversation, onClose }: { ctx: AppContext; prefill?: CreateOrderPrefill; conversation?: Conversation; onClose: () => void }) {
+export default function CreateOrderView({ ctx, prefill, conversation, dockedLeft, onClose }: { ctx: AppContext; prefill?: CreateOrderPrefill; conversation?: Conversation; dockedLeft?: number | null; onClose: () => void }) {
   const { data, shopKey, refresh, toast } = ctx;
   const products = useMemo(() => (data.products || []).filter((p) => p.shopKey === shopKey || shopKey === ''), [data.products, shopKey]);
   const shopRules = (data.shipFeeRulesByShop || {})[shopKey] || [];
@@ -270,7 +270,10 @@ export default function CreateOrderView({ ctx, prefill, conversation, onClose }:
   }, [conversations, pickConvQuery]);
 
   return (
-    <div className="create-order-overlay">
+    <div
+      className={dockedLeft != null ? 'create-order-overlay docked slide-in-from-right' : 'create-order-overlay'}
+      style={dockedLeft != null ? { left: dockedLeft } : undefined}
+    >
       <div className="create-order-header">
         <h2>Tạo đơn mới{shop ? ` — ${shop.name}` : shopKey ? ` — ${shopKey}` : ''}{chatConv ? ` • ${chatConv.customerName || 'Khách'}` : ''}</h2>
         <span className="muted small">
