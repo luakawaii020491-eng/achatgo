@@ -12,6 +12,7 @@ import { callAction, getToken, loadBootstrap, login, logout, setToken } from './
 import type { AppContext, CreateOrderPrefill } from './appctx';
 import type { Account, BootstrapData, Conversation } from './types';
 import CreateOrderView from './views/CreateOrder';
+import { CompanyFooter, CompanyFooterCompact } from './components/CompanyFooter';
 import OverviewView from './views/Overview';
 import OrdersView from './views/Orders';
 import ProductsView from './views/Products';
@@ -259,21 +260,63 @@ export default function App() {
   if (!account || !data) {
     return (
       <div className="login-screen">
-        <form className="login-card" onSubmit={doLogin}>
-          <div className="login-logo">AChatGo</div>
-          <div className="login-sub">Quản lý bán hàng — đơn hàng, hội thoại, vận chuyển</div>
-          {loginError && <div className="error">{loginError}</div>}
-          <label>Email hoặc tên đăng nhập
-            <input value={identifier} onChange={(e) => setIdentifier(e.target.value)} autoComplete="username" placeholder="vd: admin@achat.vn hoặc lua123" />
-          </label>
-          <label>Mật khẩu
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
-          </label>
-          <button className="btn btn-primary btn-block" type="submit">Đăng nhập</button>
-          <p className="muted small" style={{ textAlign: 'center', marginTop: 14 }}>
-            Lần đầu chạy: tạo tài khoản Super Admin bằng setupsuperadmin (xem README).
-          </p>
-        </form>
+        <div className="login-wrap">
+          <form className="login-card" onSubmit={doLogin}>
+            <div className="login-logo">AChatGo</div>
+            <div className="login-sub">Quản lý bán hàng — đơn hàng, hội thoại, vận chuyển</div>
+            {loginError && <div className="error">{loginError}</div>}
+            <label>Email hoặc tên đăng nhập
+              <input value={identifier} onChange={(e) => setIdentifier(e.target.value)} autoComplete="username" placeholder="vd: admin@achat.vn hoặc lua123" />
+            </label>
+            <label>Mật khẩu
+              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
+            </label>
+            <button className="btn btn-primary btn-block" type="submit">Đăng nhập</button>
+            <p className="muted small" style={{ textAlign: 'center', marginTop: 14 }}>
+              Lần đầu chạy: tạo tài khoản Super Admin bằng setupsuperadmin (xem README).
+            </p>
+          </form>
+          <div className="login-company"><CompanyFooter /></div>
+        </div>
+      </div>
+    );
+  }
+
+  // Màn hình chặn truy cập theo tên miền riêng (tenshop.achat.vn):
+  // - tên miền không thuộc shop nào, hoặc tài khoản thuộc shop khác
+  //   (lệch tên miền) → chặn;
+  // - shop của tên miền đang bị khóa (suspended) → chặn.
+  // Super Admin không bị chặn (quản lý mọi shop). Mở bằng apex/IP/localhost
+  // (không có subdomain) thì không chặn.
+  const hostName = typeof window !== 'undefined' ? window.location.hostname.toLowerCase() : '';
+  const hostShopKey = hostName.endsWith('.achat.vn') && !hostName.endsWith('www.achat.vn')
+    ? hostName.slice(0, -'.achat.vn'.length)
+    : '';
+  const hostShop = hostShopKey ? (data.shops || []).find((s) => s.key === hostShopKey) : undefined;
+  let blockedReason: 'domain' | 'suspended' | null = null;
+  if (hostShopKey) {
+    if (!hostShop) blockedReason = 'domain';
+    else if (!isSuperAdmin && account.shopKey && account.shopKey !== hostShopKey) blockedReason = 'domain';
+    else if (hostShop.status === 'suspended' && !isSuperAdmin) blockedReason = 'suspended';
+  }
+  if (blockedReason) {
+    return (
+      <div className="login-screen">
+        <div className="login-wrap">
+          <div className="login-card">
+            <div className="login-logo">AChatGo</div>
+            <h2 style={{ textAlign: 'center', fontSize: 17, margin: '14px 0 8px' }}>
+              {blockedReason === 'domain' ? 'Tên miền không khớp với tài khoản' : 'Shop đang bị khóa'}
+            </h2>
+            <p className="muted" style={{ textAlign: 'center', margin: '0 0 6px' }}>
+              {blockedReason === 'domain'
+                ? `Bạn đang mở ${hostShopKey}.achat.vn nhưng tài khoản này thuộc shop khác. Hãy đăng nhập bằng tài khoản của đúng shop, hoặc mở đúng tên miền của shop mình.`
+                : `Shop ${hostShop?.name || hostShopKey} đang bị khóa. Vui lòng liên hệ tổng đài hỗ trợ 0916636785 để được mở lại.`}
+            </p>
+            <button className="btn btn-primary btn-block" onClick={doLogout}>Đăng xuất</button>
+          </div>
+          <div className="login-company"><CompanyFooter /></div>
+        </div>
       </div>
     );
   }
@@ -431,6 +474,7 @@ export default function App() {
             ))}
           </div>
         ))}
+        <CompanyFooterCompact />
         <div className="sidebar-footer">
           <div>
             <span>{account.displayName || account.username || account.email}</span>
@@ -452,7 +496,7 @@ export default function App() {
           <span className="status-pill"><span className="dot" /> Đang hoạt động</span>
           <button className="btn btn-primary" onClick={() => openCreateOrder()}>+ Tạo đơn <span className="kbd">F1</span></button>
         </header>
-        <div className="content">{renderView()}</div>
+        <div className="content">{renderView()}<CompanyFooter /></div>
       </div>
 
       {createOrderOpen && ctx && (

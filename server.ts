@@ -32,7 +32,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { fileURLToPath } from "url";
 import path from "path";
 
-const VERSION = "v43-standalone";
+const VERSION = "v45-standalone";
 const PORT = Number(process.env.PORT ?? 10000);
 
 // ---------------------------------------------------------------------------

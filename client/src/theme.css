@@ -319,3 +319,28 @@ a { color: var(--accent); }
   .co-main { flex: 0 0 auto; overflow-y: visible; }
   .co-side { flex: 0 0 auto; }
 }
+
+/* Chân trang thông tin đơn vị phát triển (CompanyFooter, v45) — phong cách
+   Achat cũ: chữ Be Vietnam Pro, mã/SĐT JetBrains Mono, navy #182538. */
+.company-footer {
+  text-align: center; color: var(--muted); font-size: 12.5px; line-height: 1.7;
+  padding: 18px 12px 8px; margin-top: 24px; border-top: 1px solid var(--border-soft);
+}
+.company-footer .cf-label { font-size: 12px; }
+.company-footer .cf-name { font-weight: 700; color: var(--navy); font-size: 13px; }
+.company-footer .cf-copy { margin-top: 2px; }
+/* Màn đăng nhập / màn chặn truy cập: form + thẻ công ty riêng bên dưới. */
+.login-wrap { display: flex; flex-direction: column; align-items: center; gap: 14px; width: 400px; max-width: 94vw; margin: auto; }
+.login-wrap .login-card { width: 100%; max-width: 100%; }
+.login-company { width: 100%; background: #fff; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.35); padding: 14px 20px; }
+.login-company .company-footer { border-top: none; margin-top: 0; padding: 0; }
+/* Cuối sidebar (mở rộng): tên công ty + ĐKKD, gọn, cùng tông navy. */
+.sidebar-company { padding: 10px 12px; border-top: 1px solid #2c4258; font-size: 11.5px; color: #9fb2c3; line-height: 1.5; }
+.sidebar-company .company-name { display: block; font-weight: 600; color: #dbe4ef; }
+.sidebar-company .company-dkkd { display: block; }
+.sidebar-company .company-icon { display: none; color: #9fb2c3; }
+/* Sidebar thu gọn: chỉ hiện biểu tượng, rê chuột vào thấy đầy đủ (title). */
+.sidebar.collapsed .sidebar-company { display: flex; justify-content: center; padding: 10px 0; }
+.sidebar.collapsed .sidebar-company .company-icon { display: block; }
+.sidebar.collapsed .sidebar-company .company-name,
+.sidebar.collapsed .sidebar-company .company-dkkd { display: none; }
