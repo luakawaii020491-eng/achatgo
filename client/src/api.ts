@@ -91,3 +91,31 @@ export const maskPhone = (p: string | null | undefined): string => {
 };
 
 export const esc = (s: unknown): string => String(s ?? '');
+
+/** Sao chép text vào clipboard (v41 artifact): dùng navigator.clipboard khi có,
+ * fallback sang textarea + execCommand('copy') khi trình duyệt chặn clipboard API
+ * (iframe/không HTTPS). Trả true khi đã sao chép được. */
+export async function copyText(text: string): Promise<boolean> {
+  const value = String(text ?? '');
+  if (!value) return false;
+  try {
+    if (navigator.clipboard && window.isSecureContext !== false) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch { /* rơi xuống fallback */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = value;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}

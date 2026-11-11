@@ -57,10 +57,12 @@ const VIEW_TITLES: Record<ViewKey, string> = {
   team: 'Nhân viên', superadmin: 'Super Admin',
 };
 
-/** Lọc dữ liệu bootstrap theo shop đã chọn (Super Admin xem tất cả khi rỗng). */
+/** Lọc dữ liệu bootstrap theo shop đã chọn (Super Admin xem tất cả khi rỗng).
+ * Lọc NGHIÊM NGẶT theo shopKey: record không có shopKey KHÔNG tự thuộc về mọi
+ * shop (v44: page/quy tắc của Super Admin rò sang shop khác qua nhánh !x.shopKey). */
 function scopeData(data: BootstrapData, shopKey: string): BootstrapData {
   if (!shopKey) return data;
-  const byShop = (arr: any[] | undefined) => (arr || []).filter((x) => !x.shopKey || x.shopKey === shopKey);
+  const byShop = (arr: any[] | undefined) => (arr || []).filter((x) => x.shopKey === shopKey);
   return {
     ...data,
     orders: byShop(data.orders),
@@ -88,6 +90,8 @@ function scopeData(data: BootstrapData, shopKey: string): BootstrapData {
     shopeeFinance: byShop(data.shopeeFinance),
     shopeeReturns: byShop(data.shopeeReturns),
     shopeeWebhookEvents: byShop(data.shopeeWebhookEvents),
+    aiKnowledge: byShop(data.aiKnowledge),
+    records: data.records ? Object.fromEntries(Object.entries(data.records).map(([k, v]) => [k, byShop(v as any[])])) : data.records,
   };
 }
 

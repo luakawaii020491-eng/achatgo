@@ -177,6 +177,7 @@ export interface BootstrapData {
   liveSessions: any[];
   aiDrafts: any[];
   trainChats: any[];
+  aiKnowledge?: any[];
   supplierDebts: any[];
   stockRecords: any[];
   returnSlips: any[];

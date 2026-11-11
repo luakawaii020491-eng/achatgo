@@ -11,6 +11,15 @@ export default function SettingsView({ data, shopKey, isSuperAdmin, refresh, toa
   const [capiToken, setCapiToken] = useState('');
   const [invite, setInvite] = useState<any>({ enabled: true, defaultMessage: '', publicReplyFallback: true, publicReplyMessage: '' });
   const [loaded, setLoaded] = useState(false);
+  // v43 — Kết nối Page bằng Page Access Token + danh sách Page từ Facebook + hạn mức gói.
+  const [quota, setQuota] = useState<any>(null);
+  const [tokenForm, setTokenForm] = useState({ token: '', pageId: '', pageName: '' });
+  const [tokenBusy, setTokenBusy] = useState(false);
+  const [tokenChecked, setTokenChecked] = useState(false);
+  const [managedPages, setManagedPages] = useState<any[]>([]);
+  const [managedBusy, setManagedBusy] = useState(false);
+  const [pickedPages, setPickedPages] = useState<Record<string, boolean>>({});
+  const [tickedPages, setTickedPages] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (loaded) return;
@@ -19,6 +28,10 @@ export default function SettingsView({ data, shopKey, isSuperAdmin, refresh, toa
     const cfg = (data.capiConfigByShop || {})[shopKey];
     if (cfg) setCapi({ pixelId: cfg.pixelId || '', connected: !!cfg.connected, testEventCode: cfg.testEventCode || '' });
     (async () => {
+      try {
+        const q: any = await callAction('getshopquota', { shopKey }, shopKey);
+        if (q) setQuota(q);
+      } catch { /* chưa có hạn mức */ }
       try {
         const r: any = await callAction('getinvitesettings', {}, shopKey);
         if (r) setInvite({ enabled: r.enabled !== false, defaultMessage: r.defaultMessage || '', publicReplyFallback: !!r.publicReplyFallback, publicReplyMessage: r.publicReplyMessage || '' });
@@ -53,19 +66,112 @@ export default function SettingsView({ data, shopKey, isSuperAdmin, refresh, toa
           <div className="toolbar">
             <button className="btn btn-primary" onClick={async () => { try { await callAction('savemetaconfig', meta, shopKey); toast('Đã lưu cấu hình Meta.'); } catch (e: any) { toast(e.message); } }}>Lưu cấu hình Meta</button>
             <button className="btn" onClick={async () => { try { const r: any = await callAction('getoauthurl', {}, shopKey); window.open(r.url, '_blank'); } catch (e: any) { toast(e.message); } }}>Kết nối Facebook</button>
-            <button className="btn" onClick={async () => {
-              const token = window.prompt('Dán Page Access Token:');
-              if (!token) return;
-              try { const r: any = await callAction('connectpagewithtoken', { token, shopKey }, shopKey); toast(`Đã kết nối page ${r?.pageName || r?.pageId || ''}.`); await refresh(); } catch (e: any) { toast(e.message); }
-            }}>Dán token tay</button>
           </div>
+          <p className="muted small">
+            Hạn mức page theo gói {quota?.plan ? `(${quota.plan})` : ''}: đã dùng <b>{quota?.pages?.used ?? (data.fanpages || []).length}</b> / {quota?.pages?.limit ?? '—'} page
+            {quota?.staff ? <> · nhân viên {quota.staff.used}/{quota.staff.limit}</> : null}.
+            Nối tới khi đủ slot của gói — page vượt hạn mức sẽ báo rõ là chưa nối (không làm hỏng các page đã nối).
+          </p>
+
+          <h4>Kết nối Page bằng Page Access Token</h4>
+          <p className="muted small">Dán Page Access Token của Page, bấm “Kiểm tra token” để hệ thống xác thực với Facebook và tự điền tên Page (chị sửa lại tên nếu muốn), rồi bấm “Kết nối Page”. Token sai hoặc không thuộc Page nào sẽ báo rõ bằng tiếng Việt và không tạo record rác.</p>
+          <div className="form-grid">
+            <label>Page Access Token <input type="password" value={tokenForm.token} onChange={(e) => { setTokenForm({ ...tokenForm, token: e.target.value }); setTokenChecked(false); }} placeholder="Dán Page Access Token…" /></label>
+            <label>Tên Page <input value={tokenForm.pageName} onChange={(e) => setTokenForm({ ...tokenForm, pageName: e.target.value })} placeholder={tokenChecked ? 'Tên Page tự điền sau khi kiểm tra token' : 'Kiểm tra token trước để tự điền'} /></label>
+            <label>Page ID {tokenForm.pageId ? <span className="mono small">({tokenForm.pageId})</span> : null} <input value={tokenForm.pageId} onChange={(e) => setTokenForm({ ...tokenForm, pageId: e.target.value })} placeholder="Tự điền sau khi kiểm tra token" /></label>
+          </div>
+          <div className="toolbar">
+            <button className="btn" disabled={tokenBusy || !tokenForm.token.trim()} onClick={async () => {
+              setTokenBusy(true);
+              try {
+                const r: any = await callAction('inspectpagetoken', { token: tokenForm.token.trim() }, shopKey);
+                setTokenForm({ token: tokenForm.token, pageId: r.pageId || '', pageName: r.pageName || '' });
+                setTokenChecked(true);
+                toast(`Token hợp lệ — Page: ${r.pageName || r.pageId}.`);
+              } catch (e: any) { toast(e.message || 'Token không hợp lệ.'); }
+              finally { setTokenBusy(false); }
+            }}>{tokenBusy ? 'Đang kiểm tra…' : 'Kiểm tra token'}</button>
+            <button className="btn btn-primary" disabled={tokenBusy || !tokenForm.token.trim() || !tokenChecked} onClick={async () => {
+              setTokenBusy(true);
+              try {
+                const r: any = await callAction('connectpagewithtoken', { token: tokenForm.token.trim(), pageId: tokenForm.pageId || undefined, pageName: tokenForm.pageName || undefined, shopKey }, shopKey);
+                toast(`Đã kết nối page ${r?.pageName || r?.pageId || ''} — dùng được đầy đủ như Page OAuth.`);
+                setTokenForm({ token: '', pageId: '', pageName: '' });
+                setTokenChecked(false);
+                await refresh();
+                const q: any = await callAction('getshopquota', { shopKey }, shopKey);
+                if (q) setQuota(q);
+              } catch (e: any) { toast(e.message || 'Kết nối Page thất bại.'); }
+              finally { setTokenBusy(false); }
+            }}>Kết nối Page</button>
+          </div>
+
+          <h4>Lấy danh sách Page từ Facebook</h4>
+          <p className="muted small">Lấy các Page mà tài khoản Facebook đã kết nối đang quản lý, tick chọn Page cần nối (bỏ tick Page không cần), rồi bấm “Kết nối các Page đã chọn”.</p>
+          <div className="toolbar">
+            <button className="btn" disabled={managedBusy} onClick={async () => {
+              setManagedBusy(true);
+              try {
+                const r: any = await callAction('listmanagedpages', { shopKey }, shopKey);
+                const list = r?.pages || [];
+                setManagedPages(list);
+                setPickedPages(Object.fromEntries(list.filter((p: any) => !p.connected).map((p: any) => [p.id, true])));
+                toast(list.length ? `Tìm thấy ${list.length} Page do tài khoản này quản lý.` : 'Không tìm thấy Page nào — kiểm tra lại token Facebook đã lưu.');
+              } catch (e: any) { toast(e.message || 'Không lấy được danh sách Page — cần đăng nhập lại Facebook.'); }
+              finally { setManagedBusy(false); }
+            }}>{managedBusy ? 'Đang lấy…' : 'Lấy danh sách Page'}</button>
+            {managedPages.length > 0 && (
+              <button className="btn btn-primary" disabled={managedBusy || !Object.values(pickedPages).some(Boolean)} onClick={async () => {
+                const pageIds = Object.keys(pickedPages).filter((id) => pickedPages[id]);
+                setManagedBusy(true);
+                try {
+                  const r: any = await callAction('connectfanpages', { pageIds, shopKey }, shopKey);
+                  toast(`Đã nối ${r?.connected ?? pageIds.length} Page${r?.skipped?.length ? `; ${r.skipped.length} Page chưa nối: ${r.skipped.map((s: any) => `${s.name || s.pageId} (${s.reason})`).join(', ')}` : ''}.`);
+                  setManagedPages([]);
+                  await refresh();
+                  const q: any = await callAction('getshopquota', { shopKey }, shopKey);
+                  if (q) setQuota(q);
+                } catch (e: any) { toast(e.message || 'Nối Page thất bại.'); }
+                finally { setManagedBusy(false); }
+              }}>Kết nối các Page đã chọn</button>
+            )}
+          </div>
+          {managedPages.length > 0 && (
+            <table className="table"><thead><tr><th></th><th>Page</th><th>Page ID</th><th>Trạng thái</th></tr></thead>
+              <tbody>{managedPages.map((p: any) => (
+                <tr key={p.id}>
+                  <td><input type="checkbox" checked={!!pickedPages[p.id]} disabled={p.connected} onChange={(e) => setPickedPages({ ...pickedPages, [p.id]: e.target.checked })} style={{ width: 'auto' }} /></td>
+                  <td>{p.name}</td><td className="mono">{p.id}</td>
+                  <td>{p.connected ? 'Đã nối' : 'Chưa nối'}</td>
+                </tr>
+              ))}</tbody></table>
+          )}
+
           <h4>Page đã nối ({(data.fanpages || []).length})</h4>
           {(data.fanpages || []).length === 0 ? <p className="muted">Chưa nối page nào.</p> : (
-            <table className="table"><thead><tr><th>Page</th><th>Page ID</th><th>Kết nối</th><th></th></tr></thead>
-              <tbody>{(data.fanpages || []).map((f: any) => (
-                <tr key={f.id}><td>{f.name}</td><td className="mono">{f.pageId}</td><td>{f.connected ? 'Đã kết nối' : 'Chưa kết nối'}</td>
-                  <td><button className="btn btn-sm btn-danger" onClick={async () => { await callAction('disconnectfanpage', { fanpageId: f.id, pageId: f.pageId }, shopKey); toast('Đã ngắt kết nối page.'); await refresh(); }}>Ngắt kết nối</button></td></tr>
-              ))}</tbody></table>
+            <div>
+              <table className="table"><thead><tr><th>Tick</th><th>Page</th><th>Page ID</th><th>Kết nối</th><th></th></tr></thead>
+                <tbody>{(data.fanpages || []).map((f: any) => (
+                  <tr key={f.id}>
+                    <td><input type="checkbox" checked={!!tickedPages[f.id]} onChange={(e) => setTickedPages({ ...tickedPages, [f.id]: e.target.checked })} style={{ width: 'auto' }} /></td>
+                    <td>{f.name}</td><td className="mono">{f.pageId}</td><td>{f.connected ? 'Đã kết nối' : 'Chưa kết nối'}</td>
+                    <td><button className="btn btn-sm btn-danger" onClick={async () => { await callAction('disconnectfanpage', { fanpageId: f.id, pageId: f.pageId }, shopKey); toast('Đã ngắt kết nối page.'); await refresh(); }}>Ngắt kết nối</button></td></tr>
+                ))}</tbody></table>
+              {Object.values(tickedPages).some(Boolean) && (
+                <div className="toolbar">
+                  <button className="btn btn-danger" onClick={async () => {
+                    const ids = Object.keys(tickedPages).filter((id) => tickedPages[id]);
+                    for (const id of ids) {
+                      const f = (data.fanpages || []).find((x: any) => x.id === id);
+                      if (f) await callAction('disconnectfanpage', { fanpageId: f.id, pageId: f.pageId }, shopKey);
+                    }
+                    setTickedPages({});
+                    toast(`Đã ngắt ${ids.length} Page đã tick.`);
+                    await refresh();
+                  }}>Ngắt kết nối các Page đã tick ({Object.values(tickedPages).filter(Boolean).length})</button>
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}

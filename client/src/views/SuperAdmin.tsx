@@ -1,7 +1,7 @@
 // Super Admin: quản lý shop, gói SaaS, hạn mức, khóa AI từng shop,
 // khóa API Muse từng shop, cách ly dữ liệu, đơn đăng ký dùng thử.
 import React, { useEffect, useState } from 'react';
-import { callAction, fmtDate, fmtVnd, maskPhone } from '../api';
+import { callAction, copyText, fmtDate, fmtVnd, maskPhone } from '../api';
 import type { AppContext } from '../appctx';
 import { ConfirmButton, Modal } from '../components';
 
@@ -14,8 +14,12 @@ export default function SuperAdminView({ data, refresh, toast }: AppContext) {
   const [shopKey, setShopKey] = useState('');
   const [shopPlan, setShopPlan] = useState('dung-thu');
   const [quotas, setQuotas] = useState<Record<string, any>>({});
-  const [keyStatus, setKeyStatus] = useState<Record<string, any>>({});
   const [revealed, setRevealed] = useState<Record<string, string>>({});
+  const [claudeList, setClaudeList] = useState<Record<string, any>>({});
+  const [globalKey, setGlobalKey] = useState<any>(null);
+  const [pasteShop, setPasteShop] = useState('');
+  const [pasteKind, setPasteKind] = useState<'ai' | 'claude'>('ai');
+  const [pasteKey, setPasteKey] = useState('');
   const [saas, setSaas] = useState<any>(data.saasConfig || {});
   const [busy, setBusy] = useState(false);
 
@@ -26,13 +30,26 @@ export default function SuperAdminView({ data, refresh, toast }: AppContext) {
           const q: any = await callAction('getshopquota', { shopKey: s.key });
           setQuotas((prev) => ({ ...prev, [s.key]: q }));
         } catch { /* bỏ qua */ }
-        try {
-          const k: any = await callAction('checkshopaikey', { shopKey: s.key });
-          setKeyStatus((prev) => ({ ...prev, [s.key]: k }));
-        } catch { /* bỏ qua */ }
       }
+      try {
+        const list: any = await callAction('listclaudeshopkeys', {});
+        const map: Record<string, any> = {};
+        for (const row of list?.shops || []) map[row.shopKey] = row;
+        setClaudeList(map);
+        setGlobalKey(list?.global || null);
+      } catch { /* bỏ qua */ }
     })();
   }, [shops.length]);
+
+  const reloadKeyList = async () => {
+    try {
+      const list: any = await callAction('listclaudeshopkeys', {});
+      const map: Record<string, any> = {};
+      for (const row of list?.shops || []) map[row.shopKey] = row;
+      setClaudeList(map);
+      setGlobalKey(list?.global || null);
+    } catch { /* bỏ qua */ }
+  };
 
   const saveShop = async () => {
     if (!shopName.trim() || !shopKey.trim()) { toast('Nhập tên shop và key (tên miền riêng).'); return; }
@@ -55,28 +72,57 @@ export default function SuperAdminView({ data, refresh, toast }: AppContext) {
   const generateKey = async (sk: string, kind: 'ai' | 'claude') => {
     setBusy(true);
     try {
-      if (kind === 'ai') {
-        const r: any = await callAction('generateclaudeapikey', { shopKey: sk });
-        setRevealed((prev) => ({ ...prev, [`ai-${sk}`]: r?.key || r?.apiKey || '' }));
-        toast(`Đã tạo khóa AI mới cho shop ${sk} — chỉ hiện 1 lần, lưu lại ngay.`);
-      } else {
-        const r: any = await callAction('generateclaudeapikey', { shopKey: sk });
-        setRevealed((prev) => ({ ...prev, [`claude-${sk}`]: r?.key || r?.apiKey || '' }));
-        toast(`Đã tạo khóa API Muse mới cho shop ${sk} — chỉ hiện 1 lần.`);
-      }
+      const r: any = await callAction('generateclaudeapikey', { shopKey: sk, kind });
+      setRevealed((prev) => ({ ...prev, [`${kind}-${sk}`]: r?.key || r?.apiKey || '' }));
+      toast(`Đã tạo ${kind === 'ai' ? 'khóa AI' : 'khóa API Muse'} mới cho shop ${sk} — chỉ hiện 1 lần, lưu lại ngay.`);
+      await reloadKeyList();
       await refresh();
     } catch (e: any) {
       toast(e.message || 'Tạo khóa thất bại');
     } finally { setBusy(false); }
   };
 
+  const generateGlobalKey = async () => {
+    setBusy(true);
+    try {
+      const r: any = await callAction('generateclaudeapikey', { kind: 'claude' });
+      setRevealed((prev) => ({ ...prev, 'claude-global': r?.key || r?.apiKey || '' }));
+      toast('Đã tạo khóa API Muse toàn cục của Super Admin — chỉ hiện 1 lần, lưu lại ngay.');
+      await reloadKeyList();
+    } catch (e: any) {
+      toast(e.message || 'Tạo khóa toàn cục thất bại');
+    } finally { setBusy(false); }
+  };
+
   const revealKey = async (sk: string, kind: 'ai' | 'claude') => {
     try {
-      const r: any = await callAction('revealclaudeapikey', { shopKey: sk });
-      setRevealed((prev) => ({ ...prev, [`${kind}-${sk}`]: r?.key || r?.apiKey || '' }));
+      // Khóa chỉ lưu dạng băm nên "Hiện khóa" trả dạng đã che — khóa đầy đủ chỉ
+      // hiện đúng 1 lần lúc tạo (khác artifact: artifact lưu được khóa gốc).
+      const r: any = await callAction('revealclaudeapikey', { shopKey: sk, kind });
+      const masked = r?.masked || '';
+      setRevealed((prev) => ({ ...prev, [`${kind}-${sk}`]: masked ? `${masked} (đã che — khóa gốc chỉ hiện 1 lần lúc tạo)` : 'Chưa có khóa.' }));
     } catch (e: any) {
       toast(e.message || 'Hiện khóa thất bại');
     }
+  };
+
+  const copyKey = async (text: string) => {
+    const ok = await copyText(text);
+    toast(ok ? 'Đã sao chép.' : 'Không sao chép được — bôi đen rồi Ctrl+C để copy tay.');
+  };
+
+  const savePastedKey = async () => {
+    if (!pasteShop || !pasteKey.trim()) { toast('Chọn shop và dán khóa.'); return; }
+    setBusy(true);
+    try {
+      await callAction('setshopaikey', { shopKey: pasteShop, kind: pasteKind, apiKey: pasteKey.trim() });
+      toast(`Đã lưu ${pasteKind === 'ai' ? 'khóa AI' : 'khóa API Muse'} cho shop ${pasteShop}.`);
+      setPasteKey('');
+      await reloadKeyList();
+      await refresh();
+    } catch (e: any) {
+      toast(e.message || 'Lưu khóa thất bại');
+    } finally { setBusy(false); }
   };
 
   const saveSaas = async () => {
@@ -189,27 +235,64 @@ export default function SuperAdminView({ data, refresh, toast }: AppContext) {
       {tab === 'keys' && (
         <div className="card">
           <h3>Khóa AI &amp; khóa API Muse theo shop</h3>
-          <p className="muted small">Mỗi shop 1 khóa AI riêng (mọi page và tác vụ AI của shop dùng đúng khóa này) và 1 khóa API Muse riêng. Tạo lại chỉ vô hiệu khóa cũ của đúng shop đó. Khóa chỉ hiện đầy đủ 1 lần khi tạo — lưu lại ngay.</p>
+          <p className="muted small">Khóa AI và khóa API Muse là 2 khóa khác nhau, mỗi shop 1 cặp riêng. Tạo lại chỉ vô hiệu khóa cũ của đúng shop đó. Khóa chỉ hiện đầy đủ 1 lần khi tạo — lưu lại ngay; lần sau chỉ xem được dạng đã che. Chỉ Super Admin thấy được tab này — tài khoản shop không thấy và không gọi được API tạo/hiện khóa.</p>
+          <h4>Khóa API Muse toàn cục (Super Admin)</h4>
+          <p className="muted small">
+            {globalKey?.hasKey ? <>Đã có khóa toàn cục: <span className="mono">{globalKey.masked}</span> (tạo {globalKey.createdAt ? fmtDate(globalKey.createdAt) : '—'})</> : 'Chưa có khóa toàn cục.'}
+            {revealed['claude-global'] && (
+              <span> — khóa vừa tạo: <span className="mono" style={{ wordBreak: 'break-all' }}>{revealed['claude-global']}</span> <button className="btn btn-sm" onClick={() => copyKey(revealed['claude-global'])}>Sao chép</button></span>
+            )}
+          </p>
+          <div className="toolbar"><button className="btn" onClick={generateGlobalKey} disabled={busy}>Tạo khóa API Muse toàn cục</button></div>
           <table className="table">
             <thead><tr><th>Shop</th><th>Khóa AI</th><th>Khóa API Muse</th><th></th></tr></thead>
             <tbody>
-              {shops.map((s) => (
+              {shops.map((s) => {
+                const row = claudeList[s.key] || {};
+                return (
                 <tr key={s.key}>
                   <td><b>{s.name}</b><br /><span className="mono small muted">{s.key}</span></td>
                   <td>
-                    {keyStatus[s.key]?.status === 'shop' || keyStatus[s.key]?.hasKey ? <span className="badge badge-ok">Đã gán</span> : <span className="badge">Chưa gán</span>}
-                    {revealed[`ai-${s.key}`] && <div className="mono small" style={{ wordBreak: 'break-all', marginTop: 4 }}>{revealed[`ai-${s.key}`]}</div>}
+                    {row.hasAiKey ? <span className="badge badge-ok">Đã gán</span> : <span className="badge">Chưa gán</span>}
+                    {row.aiMasked && <div className="mono small" style={{ marginTop: 4 }}>{row.aiMasked} <button className="btn btn-sm" onClick={() => copyKey(row.aiMasked)}>Sao chép</button></div>}
+                    {revealed[`ai-${s.key}`] && <div className="mono small" style={{ wordBreak: 'break-all', marginTop: 4 }}>{revealed[`ai-${s.key}`]} <button className="btn btn-sm" onClick={() => copyKey(revealed[`ai-${s.key}`])}>Sao chép</button></div>}
                   </td>
-                  <td>{revealed[`claude-${s.key}`] && <div className="mono small" style={{ wordBreak: 'break-all' }}>{revealed[`claude-${s.key}`]}</div>}</td>
+                  <td>
+                    {row.hasClaudeKey ? <span className="badge badge-ok">Đã gán</span> : <span className="badge">Chưa gán</span>}
+                    {row.claudeMasked && <div className="mono small" style={{ marginTop: 4 }}>{row.claudeMasked} <button className="btn btn-sm" onClick={() => copyKey(row.claudeMasked)}>Sao chép</button></div>}
+                    {revealed[`claude-${s.key}`] && <div className="mono small" style={{ wordBreak: 'break-all', marginTop: 4 }}>{revealed[`claude-${s.key}`]} <button className="btn btn-sm" onClick={() => copyKey(revealed[`claude-${s.key}`])}>Sao chép</button></div>}
+                  </td>
                   <td className="nowrap">
                     <button className="btn btn-sm" onClick={() => generateKey(s.key, 'ai')} disabled={busy}>Tạo khóa AI mới</button>{' '}
                     <button className="btn btn-sm" onClick={() => revealKey(s.key, 'ai')}>Hiện khóa AI</button>{' '}
-                    <button className="btn btn-sm" onClick={() => generateKey(s.key, 'claude')} disabled={busy}>Tạo khóa API Muse</button>
+                    <button className="btn btn-sm" onClick={() => generateKey(s.key, 'claude')} disabled={busy}>Tạo khóa API Muse</button>{' '}
+                    <button className="btn btn-sm" onClick={() => revealKey(s.key, 'claude')}>Hiện khóa API Muse</button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
+          <h4>Dán khóa có sẵn cho shop</h4>
+          <p className="muted small">Shop đã có khóa từ trước thì dán vào đây thay vì tạo mới.</p>
+          <div className="form-grid">
+            <label>Shop
+              <select value={pasteShop} onChange={(e) => setPasteShop(e.target.value)}>
+                <option value="">— Chọn shop —</option>
+                {shops.map((s) => <option key={s.key} value={s.key}>{s.name} ({s.key})</option>)}
+              </select>
+            </label>
+            <label>Loại khóa
+              <select value={pasteKind} onChange={(e) => setPasteKind(e.target.value as 'ai' | 'claude')}>
+                <option value="ai">Khóa AI</option>
+                <option value="claude">Khóa API Muse</option>
+              </select>
+            </label>
+            <label>Khóa <input type="password" value={pasteKey} onChange={(e) => setPasteKey(e.target.value)} placeholder="sk-…" /></label>
+            <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+              <button className="btn btn-primary" onClick={savePastedKey} disabled={busy}>Lưu khóa</button>
+            </div>
+          </div>
           <h4>Đơn đăng ký dùng thử chờ duyệt</h4>
           <p className="muted">Đăng ký dùng thử (1 hoặc 7 ngày) vào hàng đợi duyệt ở đây — duyệt xong shop mới vào được app.</p>
           <button className="btn" onClick={async () => { try { await callAction('seedsampleorders', {}); toast('Đã tạo 6 đơn mẫu (ghi rõ “Đơn mẫu — xóa khi không cần”).'); await refresh(); } catch (e: any) { toast(e.message); } }}>Tạo 6 đơn mẫu để test</button>

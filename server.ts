@@ -32,7 +32,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { fileURLToPath } from "url";
 import path from "path";
 
-const VERSION = "v42-standalone";
+const VERSION = "v43-standalone";
 const PORT = Number(process.env.PORT ?? 10000);
 
 // ---------------------------------------------------------------------------
@@ -180,6 +180,11 @@ function stripShopSecrets(scoped: any): void {
         const m: any = { ...shop.meta };
         delete m.appSecret;
         delete m.userAccessToken;
+        // Page access token KHÔNG bao giờ ra client (v42: token page của shop này
+        // rò sang shop khác qua GET /api/bootstrap) — chỉ giữ id/tên/ngày nối.
+        if (Array.isArray(m.pages)) {
+          m.pages = m.pages.map((pg: any) => ({ id: pg.id, name: pg.name, shopKey: pg.shopKey, connectedAt: pg.connectedAt }));
+        }
         copy.meta = m;
       }
       if (shop.tiktok) {
@@ -199,6 +204,12 @@ function stripShopSecrets(scoped: any): void {
       }
       delete copy.capiAccessToken;
       delete copy.aiKeyHash;
+      delete copy.aiKeyMasked;
+      delete copy.aiKeyCreatedAt;
+      delete copy.claudeApiKeyHash;
+      delete copy.claudeApiKeyMasked;
+      delete copy.claudeApiKeyCreatedAt;
+      delete copy.claudeApiKeyLastUsedAt;
       return copy;
     });
   }

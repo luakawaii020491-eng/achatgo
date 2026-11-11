@@ -196,6 +196,10 @@ export interface ShopExt extends Shop {
   aiKeyHash?: string; // sha256 của khóa AI shop — KHÔNG trả về client
   aiKeyMasked?: string;
   aiKeyCreatedAt?: string;
+  claudeApiKeyHash?: string; // sha256 của khóa API Muse riêng của shop — KHÔNG trả về client (khác khóa AI)
+  claudeApiKeyMasked?: string;
+  claudeApiKeyCreatedAt?: string;
+  claudeApiKeyLastUsedAt?: string;
   meta?: {
     appId?: string;
     appSecret?: string; // KHÔNG trả về client
@@ -324,6 +328,21 @@ export interface TrainChatExt {
   at?: string;
   by?: string;
   ruleId?: string;
+  source?: 'text' | 'excel'; // nguồn của lượt dạy (excel = dạy từ file Excel mẫu)
+  fileName?: string;
+}
+
+/** Kiến thức AI đã dạy cho 1 shop (nội dung file Excel / câu dạy tay):
+ * rule-engine tra cứu khi trả lời khách, chỉ dùng kiến thức của đúng shop. */
+export interface AiKnowledgeExt {
+  id: string;
+  shopKey: string;
+  source: 'excel' | 'text';
+  fileName?: string;
+  sheet?: string;
+  text: string;
+  at: string;
+  by?: string;
 }
 
 export interface SupplierDebtExt {
@@ -388,6 +407,13 @@ export interface StateExtFull extends State {
   liveSessions: LiveSessionExt[];
   aiDrafts: AiDraftExt[];
   trainChats: TrainChatExt[];
+  /** Kiến thức AI đã dạy theo shop (file Excel / câu dạy tay) — rule-engine tra cứu. */
+  aiKnowledge: AiKnowledgeExt[];
+  /** Khóa API Muse toàn cục của Super Admin (hash + dạng che) — KHÔNG trả về client. */
+  claudeGlobalKeyHash?: string;
+  claudeGlobalKeyMasked?: string;
+  claudeGlobalKeyCreatedAt?: string;
+  claudeGlobalKeyLastUsedAt?: string;
   supplierDebts: SupplierDebtExt[];
   stockRecords: StockRecordExt[];
   returnSlips: ReturnSlipExt[];
@@ -425,6 +451,7 @@ export function extState(state: State): StateExtFull {
   s.liveSessions ??= [];
   s.aiDrafts ??= [];
   s.trainChats ??= [];
+  s.aiKnowledge ??= [];
   s.supplierDebts ??= [];
   s.stockRecords ??= [];
   s.returnSlips ??= [];
@@ -565,12 +592,16 @@ export const ACTION_NAMES: string[] = [
   'getshopeetracking',
   'getshopquota',
   'gettrainchat',
+  'inspectpagetoken',
   'gettiktokchannels',
   'gettiktokoauthurl',
   'gettiktokplatformconfig',
   'gettiktokproducts',
+  'listclaudeshopkeys',
+  'listmanagedpages',
   'listshopmetapixels',
   'loginaccount',
+  'logoutsession',
   'mapshopeesku',
   'maptiktoksku',
   'markcommentsread',
@@ -650,6 +681,7 @@ export const ACTION_NAMES: string[] = [
   'tiktokwebhookreceive',
   'trackwaybill',
   'trainchat',
+  'trainexcel',
   'unmapshopeesku',
   'unmaptiktoksku',
   'updatechathashtag',
@@ -846,6 +878,10 @@ function publicShop(state: State, s: Shop): Record<string, unknown> {
   }
   copy.capi = getCapiConfig(shopCapiLibConfig(state, s.key));
   delete copy.aiKeyHash;
+  delete copy.claudeApiKeyHash;
+  delete copy.claudeApiKeyMasked;
+  delete copy.claudeApiKeyCreatedAt;
+  delete copy.claudeApiKeyLastUsedAt;
   delete copy.capiAccessToken;
   delete copy.capiTestEventCode;
   copy.hasAiKey = Boolean(e.aiKeyHash);
@@ -949,6 +985,52 @@ function classifyIntent(text: string): 'hoc_sp' | 'len_don' | 'day_don' | 'xoa_d
   return 'chat_thuong';
 }
 
+/** Chuẩn hoá tiếng Việt để khớp từ khoá: thường hoá, bỏ dấu, đ→d. */
+function normVi(s: string): string {
+  return String(s ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/[^a-z0-9\s]/g, ' ');
+}
+
+/** Deal 2 đôi theo đúng giá từng shop (đã xác nhận với chủ shop):
+ * Xinh/Bé Đan 99k, Hana 130k; shop khác = giá catalogue × 2, miễn ship. */
+function deal2DoiText(shopKey: string, unitPrice: number): string {
+  if (shopKey === 'xinh' || shopKey === 'bedan') return '2 đôi chỉ 99k miễn ship toàn quốc ạ';
+  if (shopKey === 'hana') return '2 đôi 130k miễn ship ạ';
+  return `2 đôi ${(unitPrice * 2).toLocaleString('vi-VN')}đ miễn ship ạ`;
+}
+
+/** Phí ship 1 đôi theo từng shop (Xinh/Bé Đan 30k, Hana 25k). */
+function ship1DoiText(shopKey: string): string {
+  if (shopKey === 'hana') return 'Dạ 1 đôi ship 25k, từ 2 đôi shop em miễn ship ạ. Chị được kiểm tra hàng trước khi thanh toán ạ.';
+  return 'Dạ 1 đôi ship 30k, từ 2 đôi shop em miễn ship ạ. Chị được kiểm tra hàng trước khi thanh toán ạ.';
+}
+
+/** Tra cứu kiến thức AI đã dạy cho đúng shop (file Excel / câu dạy tay):
+ * trả về các dòng khớp từ khoá của câu hỏi, hoặc null khi không khớp. */
+function knowledgeReply(state: State, shopKey: string, text: string): string | null {
+  const E = extState(state);
+  const items = (E.aiKnowledge ?? []).filter((k) => k.shopKey === shopKey);
+  if (items.length === 0) return null;
+  const words = [...new Set(normVi(text).split(/\s+/).filter((w) => w.length > 2))];
+  if (words.length === 0) return null;
+  const scored: Array<{ line: string; score: number }> = [];
+  for (const k of items) {
+    for (const rawLine of String(k.text ?? '').split('\n')) {
+      const line = rawLine.trim();
+      if (line.length < 3) continue;
+      const nl = normVi(line);
+      let score = 0;
+      for (const w of words) if (nl.includes(w)) score += 1;
+      if (score > 0) scored.push({ line, score });
+    }
+  }
+  if (scored.length === 0) return null;
+  scored.sort((a, b) => b.score - a.score);
+  const best = scored[0].score;
+  if (best < 2 && !/\d/.test(scored[0].line)) return null;
+  const lines = scored.filter((s) => s.score === best).slice(0, 4).map((s) => s.line);
+  return lines.join('\n').slice(0, 900);
+}
+
 /** Trả lời bằng rule-engine từ bảng giá + rule AI đã dạy của đúng shop. */
 function ruleEngineReply(state: State, shopKey: string, text: string): { reply: string; intent: string; matchedRule?: string } {
   const intent = classifyIntent(text);
@@ -960,27 +1042,41 @@ function ruleEngineReply(state: State, shopKey: string, text: string): { reply: 
       return { reply: String(r.reply ?? ''), intent, matchedRule: r.id };
     }
   }
+  // Giá/size/ship/địa chỉ: trả lời từ catalogue + quy tắc ship thật của shop TRƯỚC
+  // kiến thức đã dạy — kiến thức Excel là file mẫu chung có thể chứa từ "giá",
+  // "sản phẩm" nhưng không phải giá thật của shop (vd file mẫu Xinh trả về
+  // đoạn "MỤC ĐÍCH | Mỗi shop có nhiều Page..." thay vì deal 99k/2 đôi).
+  // Kiến thức chỉ lấp câu hỏi mà catalogue không trả lời được (kịch bản, mô tả...).
   const products = state.products.filter((p) => p.shopKey === shopKey);
+  // Size thật của shop: gom từ các biến thể (36-39 Xinh/Bé Đan, 36-40 Hana, 36-37/38-39 ĐẸP +...).
+  const sizeSet = new Set<string>();
+  for (const p of products) for (const v of p.variants ?? []) if ((v as any).size) sizeSet.add(String((v as any).size));
+  const sizes = [...sizeSet];
+  const sizeText = sizes.length > 0 ? sizes.join(', ') : '';
   if (/giá|gia|bao nhiêu|bao nhieu/.test(t)) {
     if (products.length > 0) {
       const p = products[0];
       const price = p.price.toLocaleString('vi-VN');
       return {
-        reply: `Dạ shop em có ${p.name} giá ${price}đ/đôi, 2 đôi 99k miễn ship ạ. Chị lấy mấy đôi, màu nào để em lên đơn cho chị nha?`,
+        reply: `Dạ shop em có ${p.name} giá ${price}đ/đôi, ${deal2DoiText(shopKey, p.price)} Chị lấy mấy đôi, màu nào để em lên đơn cho chị nha?`,
         intent,
       };
     }
     return { reply: 'Dạ chị hỏi giá mẫu nào để em báo giá cho chị nha?', intent };
   }
   if (/size|sz|cỡ|co\b/.test(t)) {
-    return { reply: 'Dạ shop em có size 36 đến 39 ạ. Chị thường đi size bao nhiêu để em tư vấn cho vừa chân ạ?', intent };
+    if (sizeText) return { reply: `Dạ shop em có size ${sizeText} ạ. Chị thường đi size bao nhiêu để em tư vấn cho vừa chân ạ?`, intent };
+    return { reply: 'Dạ chị hỏi size của mẫu nào để em báo size còn của mẫu đó ạ?', intent };
   }
   if (/ship|giao hàng|phí/.test(t)) {
-    return { reply: 'Dạ 1 đôi ship 30k, từ 2 đôi shop em miễn ship ạ. Chị được kiểm tra hàng trước khi thanh toán ạ.', intent };
+    return { reply: ship1DoiText(shopKey), intent };
   }
   if (/địa chỉ|dia chi|shop ở đâu|o dau/.test(t)) {
     return { reply: 'Dạ shop em bán hàng online, gửi hàng đi toàn quốc, chị nhận trong 2-4 ngày tùy khu vực ạ.', intent };
   }
+  // Kiến thức đã dạy (file Excel / câu dạy tay) — dùng cho câu hỏi ngoài giá/size/ship.
+  const kb = knowledgeReply(state, shopKey, text);
+  if (kb) return { reply: kb, intent, matchedRule: 'ai-knowledge' };
   return { reply: 'Dạ em nghe ạ, chị cần em tư vấn mẫu nào ạ?', intent };
 }
 
@@ -1042,6 +1138,11 @@ function hGetBootstrap(state: State, ctx: ActionContext): ActionResult {
     liveSessions: E.liveSessions.filter(shopFilter),
     aiDrafts: E.aiDrafts.filter(shopFilter),
     trainChats: E.trainChats.filter(shopFilter),
+    aiKnowledge: (E.aiKnowledge ?? []).filter(shopFilter).map((k) => ({
+      id: k.id, shopKey: k.shopKey, source: k.source, fileName: k.fileName ?? null,
+      sheet: k.sheet ?? null, at: k.at,
+      preview: String(k.text ?? '').split('\n').filter((l: string) => l.trim()).slice(0, 3).join(' | ').slice(0, 200),
+    })),
     supplierDebts: E.supplierDebts.filter(shopFilter),
     stockRecords: E.stockRecords.filter(shopFilter),
     returnSlips: E.returnSlips.filter(shopFilter),
@@ -1089,7 +1190,12 @@ function hGetShopQuota(state: State, ctx: ActionContext, args: Record<string, an
   const shop = getShop(state, sk);
   if (!shop) return fail('Không tìm thấy shop.');
   const limits = shopLimits(state, shop);
-  const pagesUsed = state.fanpages.filter((f) => f.shopKey === sk).length;
+  // Đếm page đã dùng = hợp nhất fanpages + page trong shop.meta (tránh lệch khi 2 chỗ
+  // không đồng bộ: tài khoản được cấp 3 page mà báo 1/1 page là do chỉ đếm 1 nguồn).
+  const pageIds = new Set<string>();
+  for (const f of state.fanpages) if (f.shopKey === sk) pageIds.add(f.pageId);
+  for (const p of (shop as ShopExt).meta?.pages ?? []) pageIds.add(p.id);
+  const pagesUsed = pageIds.size;
   const staffUsed = state.accounts.filter((a) => a.shopKey === sk).length;
   return ok({
     shopKey: sk,
@@ -1577,6 +1683,10 @@ function hSaveShop(state: State, ctx: ActionContext, args: Record<string, any>):
     e.aiKeyHash = old.aiKeyHash;
     e.aiKeyMasked = old.aiKeyMasked;
     e.aiKeyCreatedAt = old.aiKeyCreatedAt;
+    e.claudeApiKeyHash = old.claudeApiKeyHash;
+    e.claudeApiKeyMasked = old.claudeApiKeyMasked;
+    e.claudeApiKeyCreatedAt = old.claudeApiKeyCreatedAt;
+    e.claudeApiKeyLastUsedAt = old.claudeApiKeyLastUsedAt;
     e.meta = old.meta;
     e.pickup = old.pickup;
     const idx = state.shops.findIndex((s) => s.key === key);
@@ -1994,72 +2104,151 @@ async function hSendCapiTestEvent(state: State, ctx: ActionContext, args: Record
 // Handlers: khóa AI theo SHOP + trợ lý AI (rule-engine) + train chat
 // ---------------------------------------------------------------------------
 
+/** Slot khóa theo loại: 'ai' = khóa AI của shop (trợ lý AI trong app),
+ * 'claude' = khóa API Muse riêng của shop (kết nối Muse tới app). Hai khóa khác nhau. */
+function keySlot(kind: string): { hash: 'aiKeyHash' | 'claudeApiKeyHash'; masked: 'aiKeyMasked' | 'claudeApiKeyMasked'; createdAt: 'aiKeyCreatedAt' | 'claudeApiKeyCreatedAt'; label: string } {
+  if (kind === 'claude') return { hash: 'claudeApiKeyHash', masked: 'claudeApiKeyMasked', createdAt: 'claudeApiKeyCreatedAt', label: 'khóa API Muse' };
+  return { hash: 'aiKeyHash', masked: 'aiKeyMasked', createdAt: 'aiKeyCreatedAt', label: 'khóa AI' };
+}
+
 function hSetShopAiKey(state: State, ctx: ActionContext, args: Record<string, any>): ActionResult {
+  const no = requireSuperAdmin(ctx);
+  if (no) return no;
   const sk = requireShop(ctx, args);
   if (typeof sk !== 'string') return sk;
   const shop = getShop(state, sk) as ShopExt | undefined;
   if (!shop) return fail('Không tìm thấy shop.');
   const key = String(args.apiKey ?? args.key ?? '');
-  if (key.length < 10) return fail('Khóa AI không hợp lệ.');
-  shop.aiKeyHash = sha256hex(key);
-  shop.aiKeyMasked = maskSecret(key);
-  shop.aiKeyCreatedAt = nowIso();
-  return ok({ shopKey: sk, hasAiKey: true, masked: shop.aiKeyMasked });
+  if (key.length < 10) return fail('Khóa không hợp lệ (quá ngắn).');
+  const slot = keySlot(String(args.kind ?? 'ai'));
+  shop[slot.hash] = sha256hex(key);
+  shop[slot.masked] = maskSecret(key);
+  shop[slot.createdAt] = nowIso();
+  return ok({ shopKey: sk, kind: args.kind ?? 'ai', hasKey: true, masked: shop[slot.masked] });
 }
 
 function hCheckShopAiKey(state: State, ctx: ActionContext, args: Record<string, any>): ActionResult {
   const sk = requireShop(ctx, args);
   if (typeof sk !== 'string') return sk;
   const shop = getShop(state, sk) as ShopExt | undefined;
-  return ok({ shopKey: sk, hasAiKey: Boolean(shop?.aiKeyHash), masked: shop?.aiKeyMasked ?? null });
+  return ok({
+    shopKey: sk,
+    hasAiKey: Boolean(shop?.aiKeyHash), masked: shop?.aiKeyMasked ?? null,
+    hasClaudeKey: Boolean(shop?.claudeApiKeyHash), claudeMasked: shop?.claudeApiKeyMasked ?? null,
+  });
+}
+
+/** Liệt kê trạng thái khóa API Muse + khóa AI của MỌI shop (chỉ Super Admin):
+ * phục vụ màn quản lý key theo từng shop — mỗi shop 1 key riêng. */
+function hListClaudeShopKeys(state: State, ctx: ActionContext): ActionResult {
+  const no = requireSuperAdmin(ctx);
+  if (no) return no;
+  const shops = state.shops.map((s) => {
+    const e = s as ShopExt;
+    return {
+      shopKey: s.key, name: s.name, plan: s.plan,
+      hasAiKey: Boolean(e.aiKeyHash), aiMasked: e.aiKeyMasked ?? null, aiCreatedAt: e.aiKeyCreatedAt ?? null,
+      hasClaudeKey: Boolean(e.claudeApiKeyHash), claudeMasked: e.claudeApiKeyMasked ?? null,
+      claudeCreatedAt: e.claudeApiKeyCreatedAt ?? null, claudeLastUsedAt: e.claudeApiKeyLastUsedAt ?? null,
+    };
+  });
+  return ok({ shops });
+}
+
+/** Đăng xuất phiên server (standalone dùng token = id tài khoản nên server không giữ
+ * phiên — client tự xóa token local; action này chỉ để tương thích artifact). */
+function hLogoutSession(): ActionResult {
+  return ok({ loggedOut: true });
 }
 
 function hGenerateClaudeApiKey(state: State, ctx: ActionContext, args: Record<string, any>): ActionResult {
+  const no = requireSuperAdmin(ctx);
+  if (no) return no;
+  const E = extState(state);
+  const kind = String(args.kind ?? 'claude');
+  const slot = keySlot(kind);
+  const key = 'sk-' + crypto.randomBytes(24).toString('hex');
+  // Không truyền shopKey = xoay khóa toàn cục của Super Admin.
+  const rawSk = String(args.shopKey ?? '');
+  if (!rawSk) {
+    if (E.claudeGlobalKeyHash && args.confirm !== true) {
+      return fail('Super Admin đã có khóa API Muse toàn cục. Gọi lại với confirm:true để thay khóa cũ (khóa cũ sẽ hết hiệu lực).');
+    }
+    E.claudeGlobalKeyHash = sha256hex(key);
+    E.claudeGlobalKeyMasked = maskSecret(key);
+    E.claudeGlobalKeyCreatedAt = nowIso();
+    return ok({ shopKey: '', scope: 'super_admin', apiKey: key, masked: E.claudeGlobalKeyMasked, note: 'Khóa chỉ hiện đầy đủ 1 lần này. Lưu lại ngay, lần sau chỉ xem được dạng đã che.' });
+  }
   const sk = requireShop(ctx, args);
   if (typeof sk !== 'string') return sk;
   const shop = getShop(state, sk) as ShopExt | undefined;
   if (!shop) return fail('Không tìm thấy shop.');
-  if (shop.aiKeyHash && args.confirm !== true) {
-    return fail('Shop đã có khóa AI. Gọi lại với confirm:true để thay khóa cũ (khóa cũ sẽ hết hiệu lực).');
+  if (shop[slot.hash] && args.confirm !== true) {
+    return fail(`Shop đã có ${slot.label}. Gọi lại với confirm:true để thay khóa cũ (khóa cũ sẽ hết hiệu lực).`);
   }
   // Sinh sk- + 48 ký tự hex (24 bytes). Hiện đầy đủ DUY NHẤT 1 lần này.
-  const key = 'sk-' + crypto.randomBytes(24).toString('hex');
-  shop.aiKeyHash = sha256hex(key);
-  shop.aiKeyMasked = maskSecret(key);
-  shop.aiKeyCreatedAt = nowIso();
-  return ok({ shopKey: sk, apiKey: key, masked: shop.aiKeyMasked, note: 'Khóa chỉ hiện đầy đủ 1 lần này. Lưu lại ngay, lần sau chỉ xem được dạng đã che.' });
+  shop[slot.hash] = sha256hex(key);
+  shop[slot.masked] = maskSecret(key);
+  shop[slot.createdAt] = nowIso();
+  return ok({ shopKey: sk, kind, apiKey: key, masked: shop[slot.masked], note: 'Khóa chỉ hiện đầy đủ 1 lần này. Lưu lại ngay, lần sau chỉ xem được dạng đã che.' });
 }
 
 function hRevealClaudeApiKey(state: State, ctx: ActionContext, args: Record<string, any>): ActionResult {
+  const no = requireSuperAdmin(ctx);
+  if (no) return no;
   const sk = requireShop(ctx, args);
   if (typeof sk !== 'string') return sk;
   const shop = getShop(state, sk) as ShopExt | undefined;
+  const slot = keySlot(String(args.kind ?? 'claude'));
   // Khóa chỉ lưu dạng băm nên không khôi phục được giá trị gốc — chỉ trả dạng che.
-  return ok({ shopKey: sk, hasAiKey: Boolean(shop?.aiKeyHash), masked: shop?.aiKeyMasked ?? null, note: 'Khóa đã lưu dạng băm, không xem lại được toàn bộ. Cần khóa mới thì dùng generateclaudeapikey.' });
+  // (Khác artifact: artifact lưu được khóa gốc nên "Hiện khóa" trả đầy đủ; standalone
+  // lưu hash nên khóa chỉ hiện đầy đủ đúng 1 lần lúc tạo.)
+  return ok({ shopKey: sk, kind: args.kind ?? 'claude', hasKey: Boolean(shop?.[slot.hash]), masked: shop?.[slot.masked] ?? null, note: 'Khóa chỉ lưu dạng băm, không xem lại được toàn bộ. Cần khóa mới thì dùng generateclaudeapikey.' });
 }
 
 function hVerifyClaudeApiKey(state: State, ctx: ActionContext, args: Record<string, any>): ActionResult {
-  const sk = requireShop(ctx, args);
-  if (typeof sk !== 'string') return sk;
-  const shop = getShop(state, sk) as ShopExt | undefined;
+  const E = extState(state);
   const key = String(args.apiKey ?? args.key ?? '');
   if (!/^sk-[0-9a-f]{48}$/.test(key)) return fail('Khóa không đúng định dạng sk- + 48 ký tự hex.');
-  if (!shop?.aiKeyHash) return fail('Shop chưa có khóa AI để đối chiếu.');
-  if (sha256hex(key) !== shop.aiKeyHash) return fail('Khóa không khớp với khóa đã lưu của shop.');
-  return ok({ shopKey: sk, valid: true });
+  const hash = sha256hex(key);
+  // Khớp khóa toàn cục của Super Admin trước, rồi tới khóa API Muse riêng từng shop.
+  if (E.claudeGlobalKeyHash && hash === E.claudeGlobalKeyHash) {
+    E.claudeGlobalKeyLastUsedAt = nowIso();
+    return ok({ shopKey: '', scope: 'super_admin', valid: true });
+  }
+  const shop = state.shops.find((s) => (s as ShopExt).claudeApiKeyHash === hash) as ShopExt | undefined;
+  if (!shop) return fail('Khóa không khớp với khóa API Muse của shop nào.');
+  shop.claudeApiKeyLastUsedAt = nowIso();
+  return ok({ shopKey: shop.key, scope: 'shop', valid: true });
 }
 
 function hGetClaudeConnection(state: State, ctx: ActionContext, args: Record<string, any>): ActionResult {
+  const no = requireSuperAdmin(ctx);
+  if (no) return no;
+  const E = extState(state);
+  const rawSk = String(args.shopKey ?? '');
+  if (!rawSk) {
+    return ok({ shopKey: '', scope: 'super_admin', hasKey: Boolean(E.claudeGlobalKeyHash), masked: E.claudeGlobalKeyMasked ?? null, createdAt: E.claudeGlobalKeyCreatedAt ?? null });
+  }
   const sk = requireShop(ctx, args);
   if (typeof sk !== 'string') return sk;
   const shop = getShop(state, sk) as ShopExt | undefined;
-  return ok({ shopKey: sk, hasAiKey: Boolean(shop?.aiKeyHash), masked: shop?.aiKeyMasked ?? null, createdAt: shop?.aiKeyCreatedAt ?? null });
+  return ok({
+    shopKey: sk, scope: 'shop',
+    hasAiKey: Boolean(shop?.aiKeyHash), masked: shop?.aiKeyMasked ?? null, createdAt: shop?.aiKeyCreatedAt ?? null,
+    hasClaudeKey: Boolean(shop?.claudeApiKeyHash), claudeMasked: shop?.claudeApiKeyMasked ?? null, claudeCreatedAt: shop?.claudeApiKeyCreatedAt ?? null,
+  });
 }
 
 function hAssistantChat(state: State, ctx: ActionContext, args: Record<string, any>): ActionResult {
   const sk = requireShop(ctx, args);
   if (typeof sk !== 'string') return sk;
-  const text = String(args.message ?? args.text ?? '');
+  // Đính kèm ảnh (v45): ảnh gửi lên khung chat trợ lý — rule-engine không "nhìn" được
+  // ảnh nên ghi nhận đã nhận ảnh; câu trả lời bám theo nội dung text đi kèm.
+  const hasImage = Boolean(args.imageDataBase64 || args.imageUrl);
+  const imageName = String(args.imageFileName ?? args.imageName ?? '');
+  let text = String(args.message ?? args.text ?? '');
+  if (!text && hasImage) text = '[Khách gửi 1 ảnh sản phẩm]';
   if (!text) return fail('Thiếu nội dung chat.');
   const intent = classifyIntent(text);
   const shop = getShop(state, sk) as ShopExt | undefined;
@@ -2071,13 +2260,17 @@ function hAssistantChat(state: State, ctx: ActionContext, args: Record<string, a
       needsConfirm: true,
       reply: `Chị xác nhận ${what} này giúp em nhé? Em sẽ làm ngay sau khi chị xác nhận.`,
       draftAction: intent,
+      imageReceived: hasImage,
     });
   }
   const r = ruleEngineReply(state, sk, text);
   const note = shop?.aiKeyHash
     ? 'Trả lời bằng rule-engine theo bảng giá + quy tắc AI đã dạy của shop.'
     : 'Shop chưa có khóa AI — trả lời bằng rule-engine (khớp từ khóa + bảng giá + quy tắc đã dạy). Thêm khóa AI trong Cài đặt để bật trợ lý đầy đủ.';
-  return ok({ intent: r.intent, reply: r.reply, matchedRule: r.matchedRule, note });
+  const reply = hasImage && !args.message && !args.text
+    ? `${r.reply}\n(Em đã nhận được ảnh${imageName ? ` "${imageName}"` : ''} rồi ạ — chị cho em biết khách hỏi gì về mẫu trong ảnh để em tư vấn cho đúng ạ.)`
+    : r.reply;
+  return ok({ intent: r.intent, reply, matchedRule: r.matchedRule, note, imageReceived: hasImage });
 }
 
 function hAiChat(state: State, ctx: ActionContext, args: Record<string, any>): ActionResult {
@@ -2088,12 +2281,60 @@ function hTrainChat(state: State, ctx: ActionContext, args: Record<string, any>)
   const E = extState(state);
   const sk = requireShop(ctx, args);
   if (typeof sk !== 'string') return sk;
+  // Dạng 1 (client Dạy AI): câu dạy tự do {message} — lưu lượt dạy + ghi kiến thức
+  // để rule-engine dùng khi trả lời khách (không cần xác nhận thêm).
+  const freeText = String(args.message ?? '');
+  if (freeText.trim()) {
+    const item: TrainChatExt = { id: uid('trn'), shopKey: sk, question: freeText.trim(), answer: '', status: 'confirmed', at: nowIso(), by: ctxAccountId(ctx), source: 'text' };
+    E.trainChats.push(item);
+    E.aiKnowledge.push({ id: uid('knw'), shopKey: sk, source: 'text', text: freeText.trim().slice(0, 4000), at: nowIso(), by: ctxAccountId(ctx) });
+    return ok({ trainChat: item, proposedRule: null, note: 'Đã dạy AI — nội dung này sẽ được dùng khi trả lời khách của đúng shop này.' });
+  }
+  // Dạng 2 (Q&A tường minh): {question, answer} — đề xuất quy tắc, chờ xác nhận.
   const question = String(args.question ?? args.q ?? '');
   const answer = String(args.answer ?? args.a ?? '');
-  if (!question || !answer) return fail('Cần câu hỏi và câu trả lời để dạy AI.');
+  if (!question || !answer) return fail('Nhập nội dung muốn dạy AI (câu chữ thường) hoặc cặp câu hỏi + câu trả lời.');
   const item: TrainChatExt = { id: uid('trn'), shopKey: sk, question, answer, status: 'pending', at: nowIso(), by: ctxAccountId(ctx) };
   E.trainChats.push(item);
-  return ok({ trainChat: item, note: 'Đã ghi lại để chờ duyệt (confirmtrainrule) rồi mới thành quy tắc AI chính thức.' });
+  const proposedRule = {
+    trainChatId: item.id,
+    name: question.slice(0, 80),
+    keywords: question.toLowerCase().split(/\s+/).filter((w) => w.length > 1).slice(0, 8),
+    reply: answer,
+  };
+  return ok({ trainChat: item, proposedRule, note: 'Đã ghi lại để chờ duyệt (confirmtrainrule) rồi mới thành quy tắc AI chính thức.' });
+}
+
+/** Dạy AI từ file Excel (v47): client parse .xlsx ra text từng sheet rồi gửi lên.
+ * Lưu từng sheet thành kiến thức của đúng shop + 1 lượt dạy ghi nhận file. */
+function hTrainExcel(state: State, ctx: ActionContext, args: Record<string, any>): ActionResult {
+  const E = extState(state);
+  const sk = requireShop(ctx, args);
+  if (typeof sk !== 'string') return sk;
+  const fileName = String(args.fileName ?? args.file ?? 'file-excel.xlsx');
+  const sheets = Array.isArray(args.sheets) ? args.sheets : [];
+  if (sheets.length === 0) return fail('File Excel không có nội dung để dạy AI (không đọc được sheet nào).');
+  let totalLines = 0;
+  const ids: string[] = [];
+  for (const s of sheets) {
+    const name = String(s?.name ?? 'Sheet');
+    const text = String(s?.text ?? '').trim();
+    if (!text) continue;
+    const lines = text.split('\n').filter((l: string) => l.trim().length > 0).length;
+    totalLines += lines;
+    const k: AiKnowledgeExt = { id: uid('knw'), shopKey: sk, source: 'excel', fileName, sheet: name, text: text.slice(0, 12000), at: nowIso(), by: ctxAccountId(ctx) };
+    E.aiKnowledge.push(k);
+    ids.push(k.id);
+  }
+  if (ids.length === 0) return fail('File Excel không có nội dung để dạy AI (các sheet đều trống).');
+  const item: TrainChatExt = {
+    id: uid('trn'), shopKey: sk,
+    question: `Đã dạy AI từ file Excel ${fileName} (${ids.length} sheet, ${totalLines} dòng)`,
+    answer: 'AI sẽ dùng thông tin Page, sản phẩm, giá, size/màu và kịch bản trong file để trả lời khách của đúng shop này, không tự bịa.',
+    status: 'confirmed', at: nowIso(), by: ctxAccountId(ctx), source: 'excel', fileName,
+  };
+  E.trainChats.push(item);
+  return ok({ trainChat: item, fileName, sheets: ids.length, lines: totalLines, knowledgeIds: ids });
 }
 
 function hConfirmTrainRule(state: State, ctx: ActionContext, args: Record<string, any>): ActionResult {
@@ -2101,6 +2342,8 @@ function hConfirmTrainRule(state: State, ctx: ActionContext, args: Record<string
   const id = String(args.trainChatId ?? args.id ?? '');
   const tc = E.trainChats.find((t) => t.id === id);
   if (!tc || !canAccess(ctx, tc.shopKey)) return fail('Không tìm thấy bản dạy AI chờ duyệt.');
+  if (tc.status === 'confirmed') return ok({ rule: null, note: 'Lượt dạy này đã được ghi nhận rồi (kiến thức AI / quy tắc đã lưu).' });
+  if (!tc.answer?.trim()) return fail('Lượt dạy này là câu dạy tự do — AI đã ghi kiến thức, không cần tạo quy tắc.');
   const rule: AiRule = {
     id: uid('air'),
     shopKey: tc.shopKey,
@@ -2119,7 +2362,12 @@ function hGetTrainChat(state: State, ctx: ActionContext, args: Record<string, an
   const E = extState(state);
   const sk = requireShop(ctx, args);
   if (typeof sk !== 'string') return sk;
-  return ok({ shopKey: sk, items: E.trainChats.filter((t) => t.shopKey === sk) });
+  const items = E.trainChats.filter((t) => t.shopKey === sk);
+  const knowledge = (E.aiKnowledge ?? []).filter((k) => k.shopKey === sk).slice(-20).reverse().map((k) => ({
+    id: k.id, source: k.source, fileName: k.fileName ?? null, sheet: k.sheet ?? null, at: k.at,
+    preview: String(k.text ?? '').split('\n').filter((l: string) => l.trim()).slice(0, 3).join(' | ').slice(0, 200),
+  }));
+  return ok({ shopKey: sk, items, turns: items, knowledge });
 }
 
 function hClearTrainChat(state: State, ctx: ActionContext, args: Record<string, any>): ActionResult {
@@ -3109,15 +3357,36 @@ async function hConnectFanpages(state: State, ctx: ActionContext, args: Record<s
   const limits = shopLimits(state, shop);
   const r = await listManagedPages(token);
   if (!r.ok) return fail(`Không lấy được danh sách page: ${r.error}`);
-  const pages = r.data ?? [];
-  if (pages.length > limits.pages) {
-    return fail(`Tài khoản có ${pages.length} page, vượt hạn mức ${limits.pages} page của gói. ${quotaError(state, 'page', limits.pages)}`);
-  }
+  const all = r.data ?? [];
+  // Chỉ nối các page shop đã tick chọn (pageIds); không chọn gì = nối tất cả (tương thích cũ).
+  const wanted: string[] | null = Array.isArray(args.pageIds) ? args.pageIds.map((x: unknown) => String(x)) : null;
+  const pages = (wanted ? all.filter((p) => wanted.includes(p.id)) : all)
+    .map((p) => ({ ...p, name: p.name ?? p.id }));
+  if (pages.length === 0) return fail('Chưa chọn page nào để nối. Tick chọn ít nhất 1 page trong danh sách.');
   shop.meta = { ...(shop.meta ?? {}), userAccessToken: token };
+  // Hạn mức gói: nối tới khi đủ slot, page vượt hạn mức thì báo rõ là chưa nối
+  // (thay vì fail cả loạt khi tài khoản có nhiều page hơn hạn mức).
+  const already = new Set((shop.meta.pages ?? []).map((p) => p.id));
+  const slotsLeft = Math.max(0, limits.pages - already.size);
+  const connected: Array<{ id: string; name: string; connectedAt?: string }> = [];
+  const skipped: Array<{ id: string; name: string; reason: string }> = [];
   for (const p of pages) {
-    if (p.access_token) upsertPageConnection(state, sk, p.id, p.name, p.access_token);
+    if (already.has(p.id)) { connected.push({ id: p.id, name: p.name }); continue; }
+    if (connected.filter((c) => !already.has(c.id)).length >= slotsLeft) {
+      skipped.push({ id: p.id, name: p.name, reason: `Vượt hạn mức ${limits.pages} page của gói ${shop.plan}.` });
+      continue;
+    }
+    if (p.access_token) {
+      upsertPageConnection(state, sk, p.id, p.name, p.access_token);
+      connected.push({ id: p.id, name: p.name });
+    } else {
+      skipped.push({ id: p.id, name: p.name, reason: 'Facebook không trả page token cho page này.' });
+    }
   }
-  return ok({ shopKey: sk, pages: (shop.meta.pages ?? []).map((p) => ({ id: p.id, name: p.name, connectedAt: p.connectedAt })) });
+  const note = skipped.length > 0
+    ? `Đã nối ${connected.length} page; ${skipped.length} page chưa nối: ${skipped.map((s) => `${s.name} (${s.reason})`).join('; ')}`
+    : `Đã nối ${connected.length} page.`;
+  return ok({ shopKey: sk, pages: (shop.meta.pages ?? []).map((p) => ({ id: p.id, name: p.name, connectedAt: p.connectedAt })), connected, skipped, note });
 }
 
 async function hConnectPageWithToken(state: State, ctx: ActionContext, args: Record<string, any>): Promise<ActionResult> {
@@ -3125,9 +3394,20 @@ async function hConnectPageWithToken(state: State, ctx: ActionContext, args: Rec
   if (typeof sk !== 'string') return sk;
   const shop = getShop(state, sk) as ShopExt | undefined;
   if (!shop) return fail('Không tìm thấy shop.');
-  const pageId = String(args.pageId ?? '');
+  let pageId = String(args.pageId ?? '');
   const pageToken = String(args.pageAccessToken ?? args.token ?? '');
-  if (!pageId || !pageToken) return fail('Thiếu pageId hoặc pageAccessToken. (Trong lúc chờ deploy Render, nối page gấp dùng đường dán tay này, không cần OAuth.)');
+  const pageNameOverride = String(args.pageName ?? '').trim();
+  if (!pageToken) return fail('Chưa dán Page Access Token. Dán token rồi bấm "Kiểm tra token" để xem token thuộc Page nào.');
+  // Token page tự xác định Page qua Graph /me (Page token thì /me chính là Page đó)
+  // nên không cần nhập pageId tay — dò ra rồi mới xác thực + tạo record.
+  let resolvedName: string | undefined = pageNameOverride || undefined;
+  if (!pageId) {
+    const me = await graphGet<{ id: string; name?: string }>('/me', pageToken, { fields: 'id,name' });
+    if (!me.ok) return fail(`Token không hợp lệ hoặc không thuộc Page nào: ${me.error} Kiểm tra lại token đã sao chép đủ chưa.`);
+    if (!me.data?.id) return fail('Token không hợp lệ hoặc không thuộc Page nào: Facebook không trả về Page. Kiểm tra lại token đã sao chép đủ chưa.');
+    pageId = me.data.id;
+    resolvedName = resolvedName ?? me.data.name;
+  }
   const limits = shopLimits(state, shop);
   const existing = shop.meta?.pages ?? [];
   if (!existing.some((p) => p.id === pageId) && existing.length >= limits.pages) {
@@ -3135,8 +3415,38 @@ async function hConnectPageWithToken(state: State, ctx: ActionContext, args: Rec
   }
   const r = await graphGet<{ id: string; name?: string }>(`/${pageId}`, pageToken, { fields: 'id,name' });
   if (!r.ok) return fail(`Token page không hợp lệ: ${r.error}`);
-  upsertPageConnection(state, sk, pageId, r.data?.name, pageToken);
-  return ok({ shopKey: sk, page: { id: pageId, name: r.data?.name } });
+  if (r.data?.id && r.data.id !== pageId) return fail('Token này không thuộc Page đã chọn. Dán đúng Page Access Token của Page đó.');
+  const finalName = resolvedName ?? r.data?.name ?? pageId;
+  upsertPageConnection(state, sk, pageId, finalName, pageToken);
+  return ok({ shopKey: sk, page: { id: pageId, name: finalName } });
+}
+
+/** Nhận diện Page của 1 Page Access Token mà KHÔNG kết nối gì:
+ * gọi Graph /me bằng token, trả về pageId + tên thật để form tự điền.
+ * Token sai/hết hạn → báo rõ bằng tiếng Việt, không tạo record nào. */
+async function hInspectPageToken(_state: State, _ctx: ActionContext, args: Record<string, any>): Promise<ActionResult> {
+  const token = String(args.token ?? args.pageAccessToken ?? '').trim();
+  if (!token) return fail('Chưa dán Page Access Token.');
+  const me = await graphGet<{ id: string; name?: string }>('/me', token, { fields: 'id,name' });
+  if (!me.ok) return fail(`Token không hợp lệ hoặc không thuộc Page nào: ${me.error} Kiểm tra lại token đã sao chép đủ chưa.`);
+  if (!me.data?.id) return fail('Token không hợp lệ hoặc không thuộc Page nào: Facebook không trả về Page. Kiểm tra lại token đã sao chép đủ chưa.');
+  return ok({ valid: true, pageId: me.data.id, pageName: me.data.name ?? me.data.id });
+}
+
+/** Liệt kê các Page mà tài khoản Facebook của shop đang quản lý (dùng user token
+ * đã lưu lúc đăng nhập Meta) để shop tick chọn page cần nối. */
+async function hListManagedPages(state: State, ctx: ActionContext, args: Record<string, any>): Promise<ActionResult> {
+  const sk = requireShop(ctx, args);
+  if (typeof sk !== 'string') return sk;
+  const shop = getShop(state, sk) as ShopExt | undefined;
+  if (!shop) return fail('Không tìm thấy shop.');
+  const token = String(args.userAccessToken ?? shop.meta?.userAccessToken ?? '');
+  if (!token) return fail('Chưa đăng nhập Facebook cho shop này. Bấm "Kết nối Facebook" trước rồi quay lại lấy danh sách Page.');
+  const r = await listManagedPages(token);
+  if (!r.ok) return fail(`Không lấy được danh sách page: ${r.error}`);
+  const connected = new Set((shop.meta?.pages ?? []).map((p) => p.id));
+  const pages = (r.data ?? []).map((p: any) => ({ id: p.id, name: p.name, category: p.category ?? '', connected: connected.has(p.id) }));
+  return ok({ shopKey: sk, pages });
 }
 
 function hDisconnectFanpage(state: State, ctx: ActionContext, args: Record<string, any>): ActionResult {
@@ -5416,12 +5726,16 @@ export async function handleAction(
       case 'getshopeetracking': return hGetShopeeTracking(state, ctx, a);
       case 'getshopquota': return hGetShopQuota(state, ctx, a);
       case 'gettrainchat': return hGetTrainChat(state, ctx, a);
+      case 'inspectpagetoken': return hInspectPageToken(state, ctx, a);
       case 'gettiktokchannels': return hGetTikTokChannels(state, ctx, a);
       case 'gettiktokoauthurl': return hGetTikTokOAuthUrl(state, ctx, a);
       case 'gettiktokplatformconfig': return hGetTikTokPlatformConfig(state, ctx, a);
       case 'gettiktokproducts': return hGetTikTokProducts(state, ctx, a);
+      case 'listclaudeshopkeys': return hListClaudeShopKeys(state, ctx);
+      case 'listmanagedpages': return hListManagedPages(state, ctx, a);
       case 'listshopmetapixels': return hListShopMetaPixels(state, ctx, a);
       case 'loginaccount': return hLoginAccount(state, a);
+      case 'logoutsession': return hLogoutSession();
       case 'mapshopeesku': return hMapShopeeSku(state, ctx, a);
       case 'maptiktoksku': return hMapTikTokSku(state, ctx, a);
       case 'markcommentsread': return hMarkCommentsRead(state, ctx, a);
@@ -5501,6 +5815,7 @@ export async function handleAction(
       case 'tiktokwebhookreceive': return hTikTokWebhookReceive(state, ctx, a);
       case 'trackwaybill': return hTrackWaybill(state, ctx, a);
       case 'trainchat': return hTrainChat(state, ctx, a);
+      case 'trainexcel': return hTrainExcel(state, ctx, a);
       case 'unmapshopeesku': return hUnmapShopeeSku(state, ctx, a);
       case 'unmaptiktoksku': return hUnmapTikTokSku(state, ctx, a);
       case 'updatechathashtag': return hUpdateChatHashtag(state, ctx, a);
